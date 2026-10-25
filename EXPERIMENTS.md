@@ -202,3 +202,28 @@ both -73 cp with identical PV and bestmove d7d6. All iteration search fields mat
 apart from timing/NPS. Each option also completed a separate enabled depth-8 smoke search.
 Logs and the short validation script are in ignored target/xeval-*.log and target/parity.ps1.
 No tournament or ARM run; no strength conclusions.
+
+## Oct 25: xsearch contempt and king-zone LMR experiments
+
+Branch xsearch, based on xeval (deployed v2.5 search); experimental options only, no
+new release or strength claim. SprContempt (0/off, 0..100 cp) assigns draws -option
+for the root color and +option for its opponent only when the previous completed
+root score exceeds +50 cp. Each thread freezes this at iteration entry, including
+aspiration re-searches. Repetition, 50-move, insufficient-material and main-search
+stalemate returns use it; qsearch draw checks are enabled only with the option.
+Terminal draws bypass TT lookup/storage as in the existing repetition handling;
+ancestor bounds retain the existing path-dependent score handling. Raw TT evals,
+mates and tablebase scores are unchanged.
+
+SprKingLmr (0/off, 0..3 plies) subtracts from quiet-move LMR when the destination
+is within Chebyshev distance 2 of the enemy king or the move checks. The existing
+reduction clamp prevents negative reduction or extra depth. King distance is computed
+from the board's king square; checks already have a separate one-ply LMR adjustment.
+
+Validation: cargo build --release and cargo test, single build job, below-normal
+priority. Threads 1, pawnstorm-g567k-480.nnue, startpos moves e2e4 c7c5 g1f3,
+depth 15: defaults 129751 nodes (-73 cp); SprMatScale=400 + SprOptimism=100
+240939 nodes (-121 cp), both exactly matching the supplied reference counts.
+Both new options enabled (25/2) also completed a depth-8 smoke search. Regression
+coverage checks terminal draw signs and bypassing TT storage. Logs/script are in
+ignored target/xsearch-*. No tournament, ARM run or Elo conclusion.

@@ -47,6 +47,9 @@ params! {
     SprEvalScale = 100, 50, 200;
     SprMatScale = 0, 0, 1024;
     SprOptimism = 0, 0, 200;
+    // Search experiments (Oct 25): identity defaults.
+    SprContempt = 0, 0, 100;
+    SprKingLmr = 0, 0, 3;
     // Search sprint 1 (Oct 19): each 0 = off.
     SprFhDepth = 0, 0, 1;
     SprCaptSeeDiv = 0, 0, 256;

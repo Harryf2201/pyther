@@ -93,6 +93,23 @@ mod tt_eval_tests {
         assert_eq!(s.np_corr[b.stm][WHITE][non_pawn_key(&b, WHITE)], 0);
         assert_eq!(s.np_corr[b.stm][BLACK][non_pawn_key(&b, BLACK)], 0);
     }
+
+    #[test]
+    fn contempt_terminal_draws_keep_color_sign_and_bypass_tt() {
+        let (mut b, mut s) = position();
+        s.draw_score = [-25, 25];
+        b.halfmove = 100;
+        assert_eq!(s.negamax(&b, 1, -INF, INF, 1, false), -25);
+        assert!(s.tt.probe(b.hash).is_none());
+        b.stm = BLACK;
+        assert_eq!(s.negamax(&b, 1, -INF, INF, 1, false), 25);
+        // Repetition uses the same terminal path without caching a draw.
+        b.halfmove = 2;
+        s.hashes = vec![b.hash, 0, b.hash];
+        assert_eq!(s.negamax(&b, 1, -INF, INF, 1, false), 25);
+        let bare = Board::from_fen("7k/8/8/8/8/8/8/7K w - - 0 1").unwrap();
+        assert_eq!(s.negamax(&bare, 1, -INF, INF, 1, false), -25);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -161,6 +178,8 @@ pub struct Searcher {
     acc: Vec<AccPair>,
     /// Per-thread, fixed throughout each iteration; never cached in TT.
     optimism: [i32; 2],
+    /// Side-to-move draw scores, frozen per thread for each iteration.
+    draw_score: [i32; 2],
     /// Nodes spent below each root move (from, to) in this search, for time management.
     root_nodes: Box<[[u64; 64]; 64]>,
     /// Whether the soft limit comes from a game clock (and may be stretched or shortened).
@@ -325,6 +344,7 @@ impl Searcher {
             helper_nodes: Vec::new(),
             nmp_min_ply: 0,
             optimism: [0; 2],
+            draw_score: [0; 2],
             overhead_ms: 10,
             ponder: Arc::new(AtomicBool::new(false)),
             pondering: false,
@@ -629,6 +649,7 @@ impl Searcher {
         self.pondering = self.main_thread && self.ponder.load(Ordering::Relaxed);
         self.ponder_move = Move::NULL;
         self.optimism = [0; 2];
+        self.draw_score = [0; 2];
         if self.main_thread {
             self.tt.new_search();
         }
@@ -689,6 +710,9 @@ impl Searcher {
             let optimism = p(P::SprOptimism) * score / (score.abs() + 100);
             self.optimism[board.stm] = optimism;
             self.optimism[board.stm ^ 1] = -optimism;
+            let contempt = if score > 50 { p(P::SprContempt) } else { 0 };
+            self.draw_score[board.stm] = -contempt;
+            self.draw_score[board.stm ^ 1] = contempt;
             let mut delta = p(P::AspDelta);
             let (mut alpha, mut beta) = if depth >= 4 { (score - delta, score + delta) } else { (-INF, INF) };
             // Sprint: after a fail-high, re-search slightly shallower (the score is already known to be good).
@@ -790,7 +814,8 @@ impl Searcher {
         let in_check = b.in_check();
         if !root {
             if b.halfmove >= 100 || b.is_insufficient_material() || self.is_repetition(b) {
-                return 0;
+                // Like repetition, these path-dependent returns bypass TT storage.
+                return self.draw_score[b.stm];
             }
             if ply >= MAX_PLY - 1 {
                 return if in_check { 0 } else { self.eval(b, ply) };
@@ -1141,6 +1166,16 @@ impl Searcher {
                             r -= (scores[i] / p(P::LmrHistDiv)).clamp(-2, 2);
                         }
                     }
+                    if is_quiet && p(P::SprKingLmr) > 0 {
+                        let king = b.king_sq(b.stm ^ 1);
+                        let to = mv.to();
+                        if (to % 8).abs_diff(king % 8) <= 2
+                            && (to / 8).abs_diff(king / 8) <= 2
+                            || nb.in_check()
+                        {
+                            r -= p(P::SprKingLmr);
+                        }
+                    }
                     r = r.clamp(0, (new_depth - 1).max(0));
                 }
                 self.stack[ply].reduction = r;
@@ -1221,7 +1256,7 @@ impl Searcher {
             } else if in_check {
                 -MATE + ply as i32
             } else {
-                0
+                self.draw_score[b.stm]
             };
         }
 
@@ -1250,6 +1285,13 @@ impl Searcher {
 
     fn qsearch(&mut self, b: &Board, mut alpha: i32, beta: i32, ply: usize) -> i32 {
         self.pv_len[ply] = ply;
+        // Keep the legacy qsearch exactly when off. Enabled draw detection, like
+        // negamax's, precedes TT lookup and does not store the terminal score.
+        if p(P::SprContempt) > 0 && ply > 0
+            && (b.halfmove >= 100 || b.is_insufficient_material() || self.is_repetition(b))
+        {
+            return self.draw_score[b.stm];
+        }
         if self.nodes & 2047 == 0 {
             self.check_time();
         }
