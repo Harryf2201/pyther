@@ -33,6 +33,37 @@ pub struct Limits {
     pub infinite: bool,
 }
 
+fn increment_budget(inc: u64, pct: i32) -> u64 {
+    if pct == 0 { inc * 3 / 4 } else { inc * pct as u64 / 100 }
+}
+
+fn clock_lead_factor(ours: u64, theirs: u64, pct: i32) -> f64 {
+    let sum = ours as f64 + theirs as f64;
+    if sum == 0.0 { return 1.0; }
+    (1.0 + pct as f64 / 100.0 * (ours as f64 - theirs as f64) / sum).clamp(0.75, 1.25)
+}
+
+fn next_iteration_ms(latest: f64, previous: f64) -> f64 {
+    latest * (latest / previous.max(0.001)).clamp(1.5, 4.0)
+}
+
+#[cfg(test)]
+mod time_experiment_tests {
+    use super::*;
+    #[test]
+    fn time_formulas() {
+        assert_eq!(increment_budget(2000, 0), 1500);
+        assert_eq!(increment_budget(2000, 100), 2000);
+        assert_eq!(increment_budget(0, 100), 0);
+        assert_eq!(clock_lead_factor(100, 100, 50), 1.0);
+        assert_eq!(clock_lead_factor(0, 0, 50), 1.0);
+        assert_eq!(clock_lead_factor(300, 100, 50), 1.25);
+        assert_eq!(clock_lead_factor(100, 300, 50), 0.75);
+        assert_eq!(next_iteration_ms(10.0, 20.0), 15.0);
+        assert_eq!(next_iteration_ms(10.0, 1.0), 40.0);
+        assert_eq!(next_iteration_ms(10.0, 5.0), 20.0);
+    }
+}
 #[cfg(test)]
 mod tt_eval_tests {
     use super::*;
@@ -452,9 +483,16 @@ impl Searcher {
             let time = time.saturating_sub(self.overhead_ms).max(1);
             let inc = limits.inc[stm];
             let mtg = limits.movestogo.unwrap_or(25).clamp(1, 25);
-            let base = (time / mtg + inc * 3 / 4).min(time);
+            let base = (time / mtg + increment_budget(inc, p(P::SprTmIncPct))).min(time);
             self.soft_ms = (base * p(P::TmSoftPct) as u64 / 100).max(1);
             self.hard_ms = (base * 3).min(time * 6 / 10).max(1);
+            let lead = p(P::SprTmClockLead);
+            if lead > 0 && limits.movestogo.is_none() {
+                if let Some(theirs) = limits.time[stm ^ 1] {
+                    self.soft_ms = ((self.soft_ms as f64 * clock_lead_factor(
+                        limits.time[stm].unwrap(), theirs, lead)) as u64).max(1);
+                }
+            }
             self.clock_tm = true;
         }
     }
@@ -588,6 +626,32 @@ impl Searcher {
     }
 
     fn score_moves(&self, b: &Board, list: &MoveList, scores: &mut [i32; 256], tt_move: Move, ply: usize, threats: u64, rows: &HistoryRows, mut see: Option<&mut [Option<bool>; 256]>) {
+        let escape = p(P::SprEscapeOrder);
+        let good_div = p(P::SprGoodCaptDiv);
+        let mut cheaper = [0u64; 6];
+        if escape > 0 {
+            use crate::attacks::*;
+            let mut attacks = 0;
+            for pt in PAWN..=ROOK {
+                let mut pieces = b.bb(b.stm ^ 1, pt);
+                while pieces != 0 {
+                    let sq = pieces.trailing_zeros() as usize;
+                    pieces &= pieces - 1;
+                    attacks |= match pt {
+                        PAWN => PAWN_ATTACKS[b.stm ^ 1][sq],
+                        KNIGHT => KNIGHT_ATTACKS[sq],
+                        BISHOP => bishop_attacks(sq, b.occ()),
+                        _ => rook_attacks(sq, b.occ()),
+                    };
+                }
+                match pt {
+                    PAWN => { cheaper[KNIGHT] = attacks; cheaper[BISHOP] = attacks; }
+                    BISHOP => cheaper[ROOK] = attacks,
+                    ROOK => cheaper[QUEEN] = attacks,
+                    _ => {}
+                }
+            }
+        }
         for i in 0..list.len {
             let mv = list.moves[i];
             scores[i] = if mv == tt_move {
@@ -609,6 +673,11 @@ impl Searcher {
                     if let Some(cache) = see.as_mut() {
                         cache[i] = Some(good);
                     }
+                    // Keep the cached threshold-zero result independent of ordering.
+                    let good = if good_div > 0 && mv.is_capture() && !mv.is_promo() {
+                        let threshold = (-hist / good_div).clamp(-80, 0);
+                        good || (threshold < 0 && b.see(mv, threshold))
+                    } else { good };
                     let base = if good { 4_000_000 } else { -4_000_000 };
                     base + value * 16 + hist
                 }
@@ -617,7 +686,14 @@ impl Searcher {
             } else if mv == self.killers[ply][1] {
                 2_000_000
             } else {
-                self.quiet_history(b, mv, rows, threats)
+                let mut score = self.quiet_history(b, mv, rows, threats);
+                if escape > 0 {
+                    let pt = b.mailbox[mv.from()] as usize % 6;
+                    let attacked = cheaper[pt];
+                    score += escape * SEE_VAL[pt] *
+                        (((attacked >> mv.from()) & 1) as i32 - ((attacked >> mv.to()) & 1) as i32);
+                }
+                score
             };
         }
     }
@@ -705,7 +781,10 @@ impl Searcher {
         let mut stable = 0usize;
         let mut prev_best = Move::NULL;
 
+        let next_pct = p(P::SprTmNextPct);
+        let mut previous_iteration = 0.0;
         for depth in 1..=max_depth {
+            let iteration_start = Instant::now();
             // Previous completed root score, frozen across aspiration re-searches.
             let optimism = p(P::SprOptimism) * score / (score.abs() + 100);
             self.optimism[board.stm] = optimism;
@@ -763,6 +842,9 @@ impl Searcher {
             // nodes, more when the search keeps changing its mind.
             stable = if best_move == prev_best { (stable + 1).min(6) } else { 0 };
             prev_best = best_move;
+            let latest_iteration = iteration_start.elapsed().as_secs_f64() * 1000.0;
+            let predicted = next_iteration_ms(latest_iteration, previous_iteration);
+            previous_iteration = latest_iteration;
             let mut soft = self.soft_ms;
             if self.clock_tm && depth >= 6 && self.nodes > 0 {
                 let frac = self.root_nodes[best_move.from()][best_move.to()] as f64 / self.nodes as f64;
@@ -771,6 +853,11 @@ impl Searcher {
             }
             self.check_time();
             if self.stopped {
+                break;
+            }
+            if next_pct > 0 && self.clock_tm && !self.pondering && depth >= 6
+                && self.elapsed_ms() as f64 + predicted > soft as f64 * next_pct as f64 / 100.0
+            {
                 break;
             }
             if (!self.pondering && self.elapsed_ms() >= soft) || limits.soft_nodes.is_some_and(|n| self.nodes >= n) {
@@ -1220,6 +1307,8 @@ impl Searcher {
                         // Sprint: a cutoff far above beta counts as if found one ply deeper.
                         let hd = depth + (p(P::SprFhDepth) > 0 && score > beta + 150) as i32;
                         let bonus = (p(P::HistBonusMul) * hd - 50).min(p(P::HistBonusMax));
+                        let malus_pct = p(P::SprHistMalusPct);
+                        let malus = if malus_pct == 0 { -bonus } else { -bonus * malus_pct / 100 };
                         if is_quiet {
                             if self.killers[ply][0] != mv {
                                 self.killers[ply][1] = self.killers[ply][0];
@@ -1227,13 +1316,13 @@ impl Searcher {
                             }
                             self.update_quiet(b, mv, &rows, bonus, threats);
                             for &q in &quiets[..n_quiets] {
-                                self.update_quiet(b, q, &rows, -bonus, threats);
+                                self.update_quiet(b, q, &rows, malus, threats);
                             }
                         } else if mv.is_capture() {
                             gravity(self.capt_entry(b, mv), bonus);
                         }
                         for &c in &captures[..n_captures] {
-                            gravity(self.capt_entry(b, c), -bonus);
+                            gravity(self.capt_entry(b, c), malus);
                         }
                         break;
                     }
@@ -1261,6 +1350,9 @@ impl Searcher {
         }
 
         if excluded.is_null() {
+            if p(P::SprFhBlend) > 0 && best >= beta && best.abs() < TB_WIN && beta.abs() < TB_WIN {
+                best = (best * depth + beta) / (depth + 1);
+            }
             let bound = if best >= beta {
                 BOUND_LOWER
             } else if !best_move.is_null() {

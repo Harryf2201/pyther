@@ -50,6 +50,13 @@ params! {
     // Search experiments (Oct 25): identity defaults.
     SprContempt = 0, 0, 100;
     SprKingLmr = 0, 0, 3;
+    SprTmIncPct = 0, 0, 200;
+    SprEscapeOrder = 0, 0, 64;
+    SprTmNextPct = 0, 0, 300;
+    SprHistMalusPct = 0, 0, 200;
+    SprGoodCaptDiv = 0, 0, 512;
+    SprFhBlend = 0, 0, 1;
+    SprTmClockLead = 0, 0, 100;
     // Search sprint 1 (Oct 19): each 0 = off.
     SprFhDepth = 0, 0, 1;
     SprCaptSeeDiv = 0, 0, 256;

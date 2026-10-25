@@ -227,3 +227,25 @@ depth 15: defaults 129751 nodes (-73 cp); SprMatScale=400 + SprOptimism=100
 Both new options enabled (25/2) also completed a depth-8 smoke search. Regression
 coverage checks terminal draw signs and bypassing TT storage. Logs/script are in
 ignored target/xsearch-*. No tournament, ARM run or Elo conclusion.
+
+## Oct 25: seven xsearch experiments (identity defaults)
+
+On deployed v2.5 + SprContempt/SprKingLmr, added independent default-zero UCI spins:
+SprTmIncPct (screen 100): use that percentage of increment in the base clock budget;
+SprEscapeOrder (16): ordinary quiet ordering rewards escaping cheaper geometric attackers;
+SprTmNextPct (125): after depth 6 predict next iteration from the last duration ratio
+(clamped 1.5..4) and stop above that percentage of dynamic soft time;
+SprHistMalusPct (50): scale cutoff maluses only, preserving rewards and LMR updates;
+SprGoodCaptDiv (128): relaxed capture-ordering SEE boundary clamp(-history/divisor,-80,0),
+preserving promotions and the separate threshold-zero SEE cache;
+SprFhBlend (1): blend normal nondecisive fail-high scores toward beta before correction/TT;
+SprTmClockLead (50): adjust soft time by relative clock lead, factor clamped 0.75..1.25,
+only with both clocks and no movestogo; hard time unchanged.
+
+No release or Elo claim. cargo build --release and cargo test passed (7 tests, including
+increment, relative-clock and iteration-prediction formula cases). Threads 1, specified
+pawnstorm-g567k-480.nnue, startpos moves e2e4 c7c5 g1f3 at depth 15: defaults 129751 nodes;
+SprMatScale=400 + SprOptimism=100: 240939 nodes, both exact reference parity. Each new option
+completed depth 10 at its suggested value with clocks/increments supplied. Searches ran
+below normal priority. Local verification script and logs: ignored target/verify-xsearch.ps1
+and target/xsearch-*.log. No ARM or playing-strength tests run.
