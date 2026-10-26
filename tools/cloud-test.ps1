@@ -46,7 +46,8 @@ if (-not $id) { throw 'could not find the started run' }
 } else { "reattached to cloud run $id" }
 
 # 3. Wait for it, then combine the shards.
-do { Start-Sleep 120; $st = (gh run view $id --json status | ConvertFrom-Json).status } while ($st -ne 'completed')
+do { Start-Sleep 120; $rv = gh run view $id --json status,conclusion | ConvertFrom-Json; $st = $rv.status } while ($st -ne 'completed')
+if ($rv.conclusion -ne 'success') { throw "cloud run $id finished with conclusion '$($rv.conclusion)'; not recording a result" }
 gh run download $id -D "$tmp\shards" | Out-Null
 $runDir = Join-Path $LabRoot "runs\$(Get-Date -Format 'yyyy-MM-dd_HHmmss')_$(($Name -replace '[^A-Za-z0-9.]+', '-').Trim('-'))"
 New-Item -ItemType Directory -Force $runDir | Out-Null
