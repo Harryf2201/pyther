@@ -21,8 +21,10 @@ use bullet_lib::{
         schedule::{TrainingSchedule, TrainingSteps, lr, wdl},
         settings::{LocalSettings, TestDataset},
     },
-    value::{ValueTrainerBuilder, loader},
+    value::ValueTrainerBuilder,
 };
+
+mod multiload;
 
 const SCALE: i32 = 400;
 const QA: i16 = 255;
@@ -181,9 +183,9 @@ fn main() {
         net_id,
         eval_scale: SCALE as f32,
         steps: TrainingSteps {
-            batch_size: 16_384,
+            batch_size: option_usize(&args, "batch-size=", 16_384),
             // 6104 * 16384 ≈ 100M positions per superbatch
-            batches_per_superbatch: 6104,
+            batches_per_superbatch: option_usize(&args, "batches=", 6104),
             start_superbatch: 1,
             end_superbatch: superbatches,
         },
@@ -199,7 +201,8 @@ fn main() {
         output_directory: &out,
         batch_queue_size: 64,
     };
-    let data_loader = loader::DirectSequentialDataLoader::new(&[data.as_str()]);
+    let data_loader = multiload::TrainingData::new(&data).expect("training data");
+    println!("Training positions     : {}", data_loader.positions());
     println!("Architecture           : ({inputs} -> {hidden})x2 -> {buckets}");
 
     // target = wdl * game_result + (1 - wdl) * sigmoid(score / SCALE)
@@ -371,4 +374,11 @@ fn main() {
         }
         _ => panic!("supported output bucket counts: 1 or 8"),
     }
+}
+fn option_usize(args: &[String], prefix: &str, default: usize) -> usize {
+    args.iter().skip(9).find_map(|a| a.strip_prefix(prefix)).map(|v| {
+        let n = v.parse().expect("positive integer batch setting");
+        assert!(n > 0);
+        n
+    }).unwrap_or(default)
 }

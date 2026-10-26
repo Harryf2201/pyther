@@ -162,3 +162,36 @@ as White, 7.Bg5 in the QGD exchange line).
 | v2.5 (v2.4 + matscale 400 + optimism 100) vs v2.4 at 40+0.4 (cloud) | +13.9 +/- 7.3 (1200 g) | Confirmed; on the bot since Oct 24 23:49 UTC | x25-cand |
 | Championship 9: Pyther 2.0/2.3/2.5 + Championship 8 field, round-robin 10+0.1, 100 g per pairing | Anchored: SF 3590, Plenty 3555, Rubi 3447, Pyther-2.5 3301, Pyther-2.3 3274, Pyther-2.0 3250 (2.0 was ~3236 in Championship 8) | v2.5 ~+50 over 2.0 against outside engines; first win vs full Stockfish | runs\2026-10-25_*Championship-9 |
 | Screens 3b-9 on v2.5 (8+0.08 gauntlets, 600-800 g per variant) | Winners: rfp95 +15.1, bundle6lite (SeDouble 12, Deeper 60, Probcut 150) +14.8, S2 (KingLmr 1 + LMR 60/280 + RFP 95 + LMP 6) +10.4, lhd10k +10.4, combo (KingLmr 1 + LMR 60/280) +10.4, evalmix (mat 200 + eval 110) +10.0. Losers: Codex batch (next-iteration -23.9, fh-blend -19.1, malus/good-capt -17, inc -14.8, escape -8.3), mat800 -35.3, corr minor/major -29.6, mat100 -11. HistPrune 1300 alone +10.9 but every stack containing it lost (-14, -15) | v2.5 prunes/reduces slightly too much; screen 10 combines S2 + bundle6lite (+ evalmix / clock lead) | specs x25-*, x25s/t/u/v/w/x-*, branch xsearch |
+
+## Oct 26: streaming trainer data parts
+
+Branch `multiload`: trainer-owned Bullet DataReader interleaves pre-shuffled
+parts without a merged output file. Accepts comma paths or a text manifest;
+selection uses weight x remaining records, consuming every record once per
+epoch. Single files use the original reader. Memory: 64 KiB/file + 512 KiB,
+plus existing Bullet queues; one open handle/file, O(files) selection cost.
+See trainer/MULTILOAD.md and tools/smoke-multiload.ps1.
+
+Release build and marker unit test passed (exact per-epoch membership/counts,
+weighted ordering, wrapping, deterministic resume). RTX 5070 GPU smoke: two
+65536-position slices of val-gen6.bin, 1 superbatch, 1024 batches x 1024,
+hidden 128 / ml / 8 buckets / WDL 0.55; 1,048,576 positions, about 5 seconds,
+training loss 0.090351045 -> 0.08712951. This is an integration smoke, no Elo
+claim. val= remains accepted, but this Bullet checkout explicitly warns that
+validation is not implemented. Logs/checkpoint: trainer/target/multiload-smoke-20261026-191504/.
+
+Oct 26 loader follow-up: 31-file / 280 MiB release benchmark (one 160 MiB,
+30 x 4 MiB), 9,175,040 records per pass. On logical CPU 0 / BelowNormal,
+linear selection 23.22-24.34M records/s; O(log files) binary sum tree
+32.02-33.96M on repeated run (about 35% higher median). Initial tree first
+sample 17.03M was transient; other initial samples 32.21-34.23M. Cached
+synthetic I/O only, not a cold-disk throughput claim. Fixtures auto-deleted.
+Single-file delegation removed: Bullet's underlying reader swallowed read
+errors as EOF. Checked bulk read_exact now preserves sequential resume with
+512 KiB output buffering; all paths check file size at each epoch. Added
+record-count overflow rejection. Release build passed; 3 correctness tests
+passed, benchmark passed (normally ignored). Covers scan/tree weighted parity,
+extreme weights, exhausted/padding leaves, exact-once epochs, partial chunks,
+absolute resume offsets at chunk/epoch boundaries, invalid sizes and truncation
+before/during reads. No new GPU training or engine version. Details and caveats
+(including old scan checkpoint ordering) in trainer/MULTILOAD.md.
