@@ -7,6 +7,19 @@ fn main() {
     match args.get(1).map(|s| s.as_str()) {
         Some("bench") => {
             let depth = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(bench::DEFAULT_DEPTH);
+            #[cfg(feature = "nnue1536")]
+            {
+                if let Some(path) = args.get(3) {
+                    nnue::load_file(path).unwrap_or_else(|e| {
+                        eprintln!("{e}");
+                        std::process::exit(1)
+                    });
+                }
+                if !nnue::active() {
+                    eprintln!("bench requires a compatible network: bench <depth> <net>");
+                    std::process::exit(1);
+                }
+            }
             bench::bench(depth);
         }
         Some("perft") => {

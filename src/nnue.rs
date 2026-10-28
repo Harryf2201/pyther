@@ -11,7 +11,10 @@ use crate::board::Board;
 use crate::types::*;
 
 /// Must match the trainer's hidden size and bucket count (trainer args 6 and 7).
+#[cfg(not(feature = "nnue1536"))]
 pub const HIDDEN: usize = 1024;
+#[cfg(feature = "nnue1536")]
+pub const HIDDEN: usize = 1536;
 pub const OUTPUT_BUCKETS: usize = 8;
 const L1: usize = 16;
 const L2: usize = 32;
@@ -41,7 +44,10 @@ pub struct Network {
     l3b: [f32; OUTPUT_BUCKETS],
 }
 
+#[cfg(not(feature = "nnue1536"))]
 static DEFAULT_NET: &[u8] = include_bytes!("../nets/default.bin");
+#[cfg(feature = "nnue1536")]
+static DEFAULT_NET: &[u8] = &[];
 static mut NET: Option<&'static Network> = None;
 
 /// Layer 1 quantised to i8 for speed (built from the f32 weights when a network loads), one row of HIDDEN
@@ -75,6 +81,11 @@ fn set_net(net: &'static Network) {
 }
 
 fn from_bytes(bytes: &[u8]) -> Result<&'static Network, String> {
+    #[cfg(feature = "nnue1536")]
+    if bytes.len() != NET_BYTES && bytes.len() != (NET_BYTES + 63) / 64 * 64 {
+        return Err(format!("network file is {} bytes, expected {NET_BYTES} bytes (or 64-byte padding), hidden width {HIDDEN}", bytes.len()));
+    }
+    #[cfg(not(feature = "nnue1536"))]
     if bytes.len() < NET_BYTES {
         return Err(format!("network file is {} bytes, expected at least {NET_BYTES}", bytes.len()));
     }

@@ -249,3 +249,12 @@ SprMatScale=400 + SprOptimism=100: 240939 nodes, both exact reference parity. Ea
 completed depth 10 at its suggested value with clocks/increments supplied. Searches ran
 below normal priority. Local verification script and logs: ignored target/verify-xsearch.ps1
 and target/xsearch-*.log. No ARM or playing-strength tests run.
+
+## Oct 28: 1536-wide infrastructure (w1536)
+
+Added optional nnue1536 build feature, exact file-size validation and explicit
+bench net argument. Companion trainer branch w1536-train retains ml training
+at runtime-selected width and adds CPU-only Bullet quantisation smoke.
+1024/1536 incremental tests pass; zero-extended net searches node-identically
+at depths 16 (2306528) and 18 (4984504). See W1536.md for build commands,
+speed results and limitations. No trained-net strength test or deployment.
