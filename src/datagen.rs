@@ -20,6 +20,7 @@ pub struct Config {
     pub threads: usize,
     pub positions: u64,
     pub soft_nodes: u64,
+    pub hard_nodes: u64,
     pub out: PathBuf,
     /// Stop (cleanly, finishing each thread's current game) after this many seconds.
     pub max_seconds: Option<u64>,
@@ -181,7 +182,7 @@ fn play_game(searcher: &mut Searcher, tt: &TT, rng: &mut Rng, cfg: &Config, stat
         return Ok(());
     }
 
-    let limits = Limits { soft_nodes: Some(cfg.soft_nodes), nodes: Some(cfg.soft_nodes * 20), ..Default::default() };
+    let limits = Limits { soft_nodes: Some(cfg.soft_nodes), nodes: Some(cfg.hard_nodes), ..Default::default() };
     let mut records: Vec<(String, i32)> = Vec::with_capacity(256);
     let (mut win_run, mut loss_run, mut draw_run) = (0, 0, 0);
     let mut plies = 0;
@@ -254,6 +255,7 @@ fn write_status(path: &Path, cfg: &Config, stats: &Stats, started: u64, state: &
         stats.nodes.load(Relaxed),
     );
     // Write then rename so readers never see a half-written file.
+    let text = format!("{text}hard_nodes={}\n", cfg.hard_nodes);
     let tmp = path.with_extension("tmp");
     if fs::write(&tmp, text).is_ok() {
         let _ = fs::rename(&tmp, path);

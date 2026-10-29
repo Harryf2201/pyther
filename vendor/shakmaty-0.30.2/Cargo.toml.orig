@@ -1,0 +1,52 @@
+[package]
+name = "shakmaty"
+version = "0.30.2" # remember to update changelog
+description = "Chess and chess variant rules and operations"
+readme = "README.md"
+categories = ["games", "parser-implementations"]
+keywords = ["chess", "lichess"]
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["std", "magics"]
+alloc = ["serde?/alloc"]
+std = ["alloc", "btoi/std", "nohash-hasher?/std"]
+magics = []
+variant = []
+arbitrary = ["dep:arbitrary", "std"]
+nohash-hasher = ["dep:nohash-hasher"]
+bincode = ["dep:bincode"]
+serde = ["dep:serde"]
+
+[[bench]]
+name = "benches"
+harness = false
+required-features = ["alloc"]
+
+[lib]
+bench = false
+
+[dependencies]
+arbitrary = { version = "1.4.2", features = ["derive"], optional = true } # version linked in docs
+arrayvec = { version = "0.7", default-features = false }
+bincode = { version = "2.0.1", features = ["derive"], default-features = false, optional = true } # version linked in lib.rs
+bitflags = "2.0.0"
+btoi = { version = "0.5", default-features = false }
+nohash-hasher = { version = "0.2", default-features = false, optional = true } # version linked in lib.rs
+serde = { version = "1.0.197", default-features = false, optional = true } # version linked in lib.rs
+
+[dev-dependencies]
+csv = "1.3.1"
+gungraun = "=0.20.0" # must exactly match gungraun-runner in ci.yml
+serde = { version = "1.0.197", features = ["derive"] }
+serde_with = "3.14.0"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docs_rs"]
+
+[lints]
+workspace = true

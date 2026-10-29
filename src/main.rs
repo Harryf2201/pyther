@@ -26,6 +26,10 @@ fn main() {
             let flag = |k: &str| {
                 args.iter().position(|a| a == k).map(|i| args.get(i + 1).filter(|v| !v.starts_with("--")).unwrap_or_else(|| panic!("{k} needs a value")).clone())
             };
+            let soft_nodes = arg(4, 5000);
+            let hard_nodes = flag("--hard-nodes").map(|s| s.parse::<u64>().expect("invalid --hard-nodes"))
+                .unwrap_or_else(|| soft_nodes.saturating_mul(20));
+            assert!(soft_nodes > 0 && hard_nodes >= soft_nodes, "require 0 < soft nodes <= hard nodes");
             let openings = flag("--openings").map(|p| datagen::load_openings(&p)).unwrap_or_default();
             let opening_percent = flag("--opening-percent").map(|s| s.parse::<usize>().ok().filter(|&p| p <= 100).expect("--opening-percent must be 0-100")).unwrap_or(50);
             let deny = flag("--deny").map(|p| datagen::load_deny(&p)).unwrap_or_default();
@@ -35,7 +39,8 @@ fn main() {
             datagen::run(datagen::Config {
                 threads: arg(2, 8) as usize,
                 positions: arg(3, 100_000_000),
-                soft_nodes: arg(4, 5000),
+                soft_nodes,
+                hard_nodes,
                 out: pos(5).map(Into::into).unwrap_or_else(|| "datagen".into()),
                 max_seconds: opt(6),
                 seed: opt(7),

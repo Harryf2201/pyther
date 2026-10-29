@@ -1,0 +1,9 @@
+# Additional configuration for the isolated datagen-build workspace only.
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+
+[net]
+offline = true

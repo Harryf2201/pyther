@@ -1,0 +1,29 @@
+name: Test
+
+on:
+  - push
+  - pull_request
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        toolchain:
+          - "1.60"
+          - stable
+          - beta
+          - nightly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          targets: thumbv6m-none-eabi
+      - run: cargo update --package num-traits
+      - run: cargo test
+      - run: cargo test --no-default-features
+      - run: cargo bench
+      - run: cargo check --manifest-path fuzz/Cargo.toml
+        if: matrix.toolchain == 'nightly'
+      - run: cargo check --target thumbv6m-none-eabi --no-default-features

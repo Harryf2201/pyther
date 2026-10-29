@@ -15,12 +15,18 @@ on:
       soft_nodes:
         description: "Soft node limit per move (local generator uses 5000)"
         default: "5000"
+      hard_nodes:
+        description: "Hard node limit per move (must be >= soft_nodes)"
+        default: "100000"
+      source_commit:
+        description: "Optional full commit SHA to pin checkout (launcher resolves -Ref)"
+        default: ""
       chain:
         description: "Follow-up batches to start automatically after this one (only if every job succeeds)"
         default: "0"
       eval:
         description: "classical = hand-crafted eval (gen1 data); nnue = the network in nets/default.bin (gen2 data)"
-        default: "classical"
+        default: "nnue"
 
 # Only one batch at a time; a second request waits for the first to finish.
 concurrency:
@@ -41,14 +47,16 @@ jobs:
       - id: plan
         env:
           GH_TOKEN: ${{ github.token }}
+          REQUESTED_JOBS: ${{ inputs.jobs }}
         run: |
-          req="${{ inputs.jobs }}"
+          req="$REQUESTED_JOBS"
           if [ "$req" = "auto" ] || [ "$req" = "6" ]; then
             # The account runs 20 jobs at once; a test match needs 6 of them.
             busy=$(gh run list --repo "${{ github.repository }}" --workflow test-match.yml --limit 30 --json status -q '[.[] | select(.status != "completed")] | length' || echo 1)
             if [ "${busy:-1}" -gt 0 ]; then n=14; else n=20; fi
             echo "auto: ${busy} test run(s) running or queued -> ${n} jobs"
           else
+            [[ "$req" =~ ^[0-9]+$ ]] || { echo "invalid jobs"; exit 1; }
             n=$(( req ))
           fi
           if [ "$n" -gt 20 ]; then n=20; fi
@@ -66,23 +74,59 @@ jobs:
         shard: ${{ fromJson(needs.plan.outputs.shards) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_commit || github.sha }}
 
       - name: Build (${{ inputs.eval }} evaluation)
+        env:
+          EVAL: ${{ inputs.eval }}
         run: |
+          set -euo pipefail
           # An empty network file makes the engine use its hand-crafted evaluation.
-          if [ "${{ inputs.eval }}" != "nnue" ]; then : > nets/default.bin; fi
-          ls -l nets/default.bin
-          cargo build --release -p pawnstorm
-          ./target/release/pawnstorm perft
+          case "$EVAL" in
+            nnue) test "$(wc -c < nets/default.bin)" -eq 2118208; test "$(cat nets/default.gen)" = 8; sha256sum -c nets/default.sha256 ;;
+            classical) : > nets/default.bin ;;
+            *) echo "invalid eval"; exit 1 ;;
+          esac
+          # Sources are vendored from the existing local cache: no registry downloads.
+          nice -n 10 cargo --config .cargo/offline.toml build --release --offline --locked -j 6 --manifest-path datagen-build/Cargo.toml
+          nice -n 10 ./datagen-build/target/release/pawnstorm perft
 
       - name: Generate
+        env:
+          SOFT: ${{ inputs.soft_nodes }}
+          HARD: ${{ inputs.hard_nodes }}
+          MINUTES: ${{ inputs.minutes }}
+          EVAL: ${{ inputs.eval }}
         run: |
+          set -euo pipefail
+          [[ "$SOFT" =~ ^[0-9]+$ && "$HARD" =~ ^[0-9]+$ && "$MINUTES" =~ ^[0-9]+$ ]]
+          (( SOFT > 0 && HARD >= SOFT && MINUTES >= 10 && MINUTES <= 340 ))
           out="data/shard-${{ matrix.shard }}"
           mkdir -p "$out"
           # Distinct seed per job: run id and shard number mixed together.
           seed=$(( (${{ github.run_id }} * 1000 + ${{ matrix.shard }}) % 9007199254740991 ))
-          echo "cores: $(nproc), seed: $seed"
-          ./target/release/pawnstorm datagen "$(nproc)" 1000000000000 ${{ inputs.soft_nodes }} "$out" $(( ${{ inputs.minutes }} * 60 )) "$seed" --openings openings/gen7-human.uci --opening-percent 50 --deny openings/testbook-starts.fen | tr '\r' '\n' | tail -n 3
+          threads=$(nproc); if [ "$threads" -gt 6 ]; then threads=6; fi
+          echo "threads: $threads, seed: $seed"
+          exe=./datagen-build/target/release/pawnstorm
+          gen=$(cat nets/default.gen); [ "$EVAL" = nnue ] || gen=1
+          {
+            echo "gen=$gen"
+            echo "source_tag=gen${gen}o-big7-cloud-n$SOFT"
+            echo "commit=$(git rev-parse HEAD)"
+            echo "net_sha256=$(sha256sum nets/default.bin | cut -d' ' -f1)"
+            echo "exe_sha256=$(sha256sum "$exe" | cut -d' ' -f1)"
+            echo "nnue_width=1024"
+            echo "eval=$EVAL"
+            echo "soft_nodes=$SOFT"
+            echo "hard_nodes=$HARD"
+            echo "seed=$seed"
+            echo "opening_percent=50"
+            echo "opening_sha256=$(sha256sum openings/gen7-human.uci | cut -d' ' -f1)"
+            echo "deny_sha256=$(sha256sum openings/testbook-starts.fen | cut -d' ' -f1)"
+          } > "$out/provenance.txt"
+          nice -n 10 "$exe" datagen "$threads" 1000000000000 "$SOFT" "$out" "$(( MINUTES * 60 ))" "$seed" --hard-nodes "$HARD" --openings openings/gen7-human.uci --opening-percent 50 --deny openings/testbook-starts.fen | tr '\r' '\n' | tail -n 3
+          cat "$out/provenance.txt" >> "$out/status.txt"
           cat "$out/status.txt"
 
       - name: Compress
@@ -101,21 +145,28 @@ jobs:
 
   # Starts the next batch in a chain. Runs only if every generate job succeeded, so any failure,
   # cancellation or throttling ends the chain. The new run waits in the concurrency queue until
-  # this one has fully finished, so batches never overlap. With the repository variable
-  # DATAGEN_FOREVER = 1 the chain never runs out (set it to 0 to stop after the current batch;
-  # tools\cloud-sync.ps1 does that itself if GitHub ever warns about usage).
+  # this one has fully finished, so batches never overlap. This isolated generation
+  # branch uses finite explicit chains only; DATAGEN_FOREVER does not extend them.
   next:
     needs: generate
-    if: ${{ success() && ((inputs.chain != '' && inputs.chain != '0') || vars.DATAGEN_FOREVER == '1') }}
+    if: ${{ success() && inputs.chain != '' && inputs.chain != '0' }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
     steps:
       - env:
           GH_TOKEN: ${{ github.token }}
+          SOFT: ${{ inputs.soft_nodes }}
+          HARD: ${{ inputs.hard_nodes }}
+          MINUTES: ${{ inputs.minutes }}
+          EVAL: ${{ inputs.eval }}
+          SOURCE_COMMIT: ${{ inputs.source_commit || github.sha }}
+          REQUESTED_JOBS: ${{ inputs.jobs }}
+          CHAIN: ${{ inputs.chain || '0' }}
         run: |
-          remaining=$(( ${{ inputs.chain || 0 }} - 1 ))
+          [[ "$CHAIN" =~ ^[0-3]$ ]] || exit 1
+          remaining=$(( CHAIN - 1 ))
           if [ "$remaining" -lt 0 ]; then remaining=0; fi
           echo "starting the next batch ($remaining more after it)"
           gh workflow run datagen.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" \
-            -f jobs=${{ inputs.jobs }} -f minutes=${{ inputs.minutes }} -f soft_nodes=${{ inputs.soft_nodes }} -f chain=$remaining -f eval=${{ inputs.eval }}
+            -f jobs="$REQUESTED_JOBS" -f minutes="$MINUTES" -f soft_nodes="$SOFT" -f hard_nodes="$HARD" -f chain="$remaining" -f eval="$EVAL" -f source_commit="$SOURCE_COMMIT"

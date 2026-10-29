@@ -1,0 +1,45 @@
+#[cfg(feature = "variant")]
+#[test]
+fn test_zobrist_reference() {
+    use serde::Deserialize;
+    use serde_with::{
+        DisplayFromStr, FromInto, StringWithSeparator, formats::SpaceSeparator, serde_as,
+    };
+    use shakmaty::{
+        EnPassantMode, Position as _,
+        uci::UciMove,
+        variant::{Variant, VariantPosition},
+        zobrist::Zobrist128,
+    };
+
+    #[serde_as]
+    #[derive(Deserialize)]
+    struct Record {
+        #[serde_as(as = "DisplayFromStr")]
+        variant: Variant,
+        #[serde_as(as = "StringWithSeparator<SpaceSeparator, UciMove>")]
+        uci: Vec<UciMove>,
+        #[serde_as(as = "FromInto<u128>")]
+        zobrist: Zobrist128,
+    }
+
+    let mut reader = csv::Reader::from_path("tests/zobrist.csv").expect("reader");
+
+    for (i, record) in reader.deserialize().enumerate() {
+        let record: Record = record.expect("record");
+
+        let mut pos = VariantPosition::new(record.variant);
+
+        for uci in record.uci {
+            let m = uci.to_move(&pos).expect("legal uci");
+            pos.play_unchecked(m);
+        }
+
+        assert_eq!(
+            pos.zobrist_hash::<Zobrist128>(EnPassantMode::Legal),
+            record.zobrist,
+            "line {}",
+            i + 2
+        )
+    }
+}

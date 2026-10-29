@@ -1,0 +1,3 @@
+# Preserve cached upstream crate bytes exactly: Cargo verifies their checksums.
+# Do not normalise line endings or review third-party source as our own patch.
+vendor/** -text -diff

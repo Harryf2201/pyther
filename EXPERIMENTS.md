@@ -1,5 +1,33 @@
 # Pawnstorm experiments log
 
+## 2026-10-29: gen8 datagen staging (not an engine release)
+
+Branch `gen8-datagen` starts from `targeted` c2523b5, matching the running PC
+gen7k generator's FEN-start code path. HIDDEN is 1024 and the embedded net is
+big7-480 (`x25-big7.nnue`, SHA256
+`3737bc586abde795f11378df935e6aa4cc1b1f429cff4c13bda45bca339f76de`).
+Sampling, opening randomisation, search defaults and adjudication are unchanged;
+`--hard-nodes` explicitly exposes the existing 20x soft default (5k/100k).
+The adapter now checks exact executable/output ownership, with PID creation-time
+rechecks, and regards SPSA fastchess as busy. It was not launched.
+
+CPU-only verification: two one-game attack-seed runs produced 46 valid records
+each, parsed by Bullet into 32-byte records. Four FENs at a 20k node budget matched
+`pawnstorm-xsearch5` loading big7: static eval, every completed iteration's nodes,
+score/PV, and bestmove (excluding time/NPS). Both use UCI defaults; this is not a
+claim of equivalence with v2.5's enabled material-scaling/optimism options.
+Four existing library tests and all six perft positions pass. Adapter predicate/busy
+tests and five PowerShell parser checks pass. YAML parses and five workflow Bash
+blocks pass `bash -n`. The binary mix helper passed a 200-record control versus
+180-old/20-fresh fixture. All 1,354 upstream checksum entries and 1,378 staged
+vendor blobs match their original cached bytes. No live jobs, bot or Oracle changes,
+workflow dispatch, or Elo claim.
+
+GitHub artifacts carry net/executable hashes, source commit, generation, source tag
+and recipe. An isolated engine-only workspace plus cached vendored crates allows
+offline hosted builds. Explicit finite chains only; the generation branch ignores
+DATAGEN_FOREVER. Local operational recipe: `testing/coord/GEN8.md` outside the repo.
+
 ## Oct 22: targeted king-attack self-play starts (branch targeted)
 
 Added `tools/attack-seeds` and datagen `--fens` / `--fen-percent`: own-engine
