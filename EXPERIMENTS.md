@@ -249,3 +249,18 @@ SprMatScale=400 + SprOptimism=100: 240939 nodes, both exact reference parity. Ea
 completed depth 10 at its suggested value with clocks/increments supplied. Searches ran
 below normal priority. Local verification script and logs: ignored target/verify-xsearch.ps1
 and target/xsearch-*.log. No ARM or playing-strength tests run.
+
+## 2026-10-30: optional dual L1 activation (dualact)
+
+Build-time `dualact` feature, default off, from xsearch 94f4385. L1's 16 preactivations
+feed [SCReLU; CReLU], making L2 32 -> 32 per output bucket. Matching mldual trainer
+is on trainer-dualact; dualact-cloud defaults the feature on. See DUALACT.md for
+binary layout, reproducible checks and training/checkpoint handoff.
+
+Default x25-big7 parity: bench depth10 90147; six positions 13189/16184/16228/3248/11164/6121,
+all exact xsearch5 matches with the full option file. Seven native and scalar library
+tests passed. Dual random net: 23169 positions, exact scalar deployed-arithmetic
+reference, maximum 3cp deviation from float trainer graph on saved L0 weights.
+Pinned synthetic paired depth11 bench: median NPS ratio 0.7422 (25.8% loss), so the
+speed hypothesis is not met by this implementation. No accuracy/Elo evidence yet.
+No GPU/trainer execution or ARM test; Claude must verify trained agreement and NEON.

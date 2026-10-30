@@ -15,12 +15,14 @@ pub const HIDDEN: usize = 1024;
 pub const OUTPUT_BUCKETS: usize = 8;
 const L1: usize = 16;
 const L2: usize = 32;
+// File order and trainer concat order: squared clipped values, then clipped values.
+const L2_INPUTS: usize = if cfg!(feature = "dualact") { 2 * L1 } else { L1 };
 const SCALE: f32 = 400.0;
 const QA: i32 = 255;
 
 /// Size of bullet's quantised output (it may be padded to a multiple of 64).
 pub const NET_BYTES: usize = (768 * HIDDEN + HIDDEN) * 2
-    + (HIDDEN * OUTPUT_BUCKETS * L1 + OUTPUT_BUCKETS * L1 + L1 * OUTPUT_BUCKETS * L2 + OUTPUT_BUCKETS * L2 + L2 * OUTPUT_BUCKETS + OUTPUT_BUCKETS) * 4;
+    + (HIDDEN * OUTPUT_BUCKETS * L1 + OUTPUT_BUCKETS * L1 + L2_INPUTS * OUTPUT_BUCKETS * L2 + OUTPUT_BUCKETS * L2 + L2 * OUTPUT_BUCKETS + OUTPUT_BUCKETS) * 4;
 
 #[derive(Clone, Copy)]
 #[repr(C, align(64))]
@@ -35,7 +37,7 @@ pub struct Network {
     // bullet's native (input-major) layout: for each input, the outputs of every bucket in a row.
     l1w: [[[f32; L1]; OUTPUT_BUCKETS]; HIDDEN],
     l1b: [[f32; L1]; OUTPUT_BUCKETS],
-    l2w: [[[f32; L2]; OUTPUT_BUCKETS]; L1],
+    l2w: [[[f32; L2]; OUTPUT_BUCKETS]; L2_INPUTS],
     l2b: [[f32; L2]; OUTPUT_BUCKETS],
     l3w: [[f32; OUTPUT_BUCKETS]; L2],
     l3b: [f32; OUTPUT_BUCKETS],
@@ -75,8 +77,8 @@ fn set_net(net: &'static Network) {
 }
 
 fn from_bytes(bytes: &[u8]) -> Result<&'static Network, String> {
-    if bytes.len() < NET_BYTES {
-        return Err(format!("network file is {} bytes, expected at least {NET_BYTES}", bytes.len()));
+    if bytes.len() != NET_BYTES && bytes.len() != NET_BYTES.next_multiple_of(64) {
+        return Err(format!("network file is {} bytes, expected {NET_BYTES} (or {} padded), dualact={}", bytes.len(), NET_BYTES.next_multiple_of(64), cfg!(feature = "dualact")));
     }
     unsafe {
         let layout = std::alloc::Layout::new::<Network>();
@@ -91,8 +93,14 @@ fn from_bytes(bytes: &[u8]) -> Result<&'static Network, String> {
 
 /// Loads the embedded network, if one was built in.
 pub fn init() {
-    if let Ok(net) = from_bytes(DEFAULT_NET) {
-        set_net(net);
+    match from_bytes(DEFAULT_NET) {
+        Ok(net) => set_net(net),
+        Err(_err) => {
+            #[cfg(feature = "dualact")]
+            if !DEFAULT_NET.is_empty() {
+                println!("info string embedded network rejected: {_err}; load a matching mldual EvalFile");
+            }
+        }
     }
 }
 
@@ -357,6 +365,14 @@ pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
             h2[o] += w[o] * x;
         }
     }
+    #[cfg(feature = "dualact")]
+    for (j, &h) in h1.iter().enumerate() {
+        let x = h.clamp(0.0, 1.0);
+        let w = &net.l2w[L1 + j][bucket];
+        for o in 0..L2 {
+            h2[o] += w[o] * x;
+        }
+    }
     let mut out = net.l3b[bucket];
     for (k, &h) in h2.iter().enumerate() {
         let x = h.clamp(0.0, 1.0);
@@ -370,10 +386,62 @@ mod tests {
     use super::*;
     use crate::attacks;
 
+    // Independent scalar forward pass. L0 is refreshed from board features; model the
+    // engine's existing pairwise rounding and per-row i8 L1 quantisation explicitly.
+    // All following activations and affine layers are the trainer graph formulas.
+    fn scalar_reference(b: &Board, quantised: bool) -> i32 {
+        let n = net();
+        let bucket = ((b.occ().count_ones().saturating_sub(2)) as usize / 4).min(7);
+        let mut acc = [Accumulator { vals: [0; HIDDEN] }; 2];
+        refresh(b, &mut acc);
+        let mut input = [0i32; HIDDEN];
+        for (side, base) in [(b.stm, 0), (b.stm ^ 1, HIDDEN / 2)] {
+            for i in 0..HIDDEN / 2 {
+                let a = acc[side].vals[i].clamp(0, 255) as i32;
+                let c = acc[side].vals[i + HIDDEN / 2].clamp(0, 255) as i32;
+                input[base + i] = (a * c + 256) / 512;
+            }
+        }
+        let mut h = [0f32; L2_INPUTS];
+        for j in 0..L1 {
+            let max = (0..HIDDEN).fold(0f32, |m, i| m.max(n.l1w[i][bucket][j].abs())).max(1e-6);
+            let scale = 127.0 / max;
+            let dot: i32 = (0..HIDDEN).map(|i| input[i] * (n.l1w[i][bucket][j] * scale).round() as i8 as i32).sum();
+            let pre = if quantised {
+                n.l1b[bucket][j] + dot as f32 * (512.0 / (65025.0 * scale))
+            } else {
+                let mut v = n.l1b[bucket][j];
+                for (side, base) in [(b.stm, 0), (b.stm ^ 1, HIDDEN / 2)] {
+                    for i in 0..HIDDEN / 2 {
+                        let a = acc[side].vals[i].clamp(0, 255) as f32 / 255.0;
+                        let c = acc[side].vals[i + HIDDEN / 2].clamp(0, 255) as f32 / 255.0;
+                        v += n.l1w[base + i][bucket][j] * (a * c);
+                    }
+                }
+                v
+            };
+            let v = pre.clamp(0.0, 1.0);
+            h[j] = v * v;
+            #[cfg(feature = "dualact")]
+            { h[L1 + j] = v; }
+        }
+        let mut out = n.l3b[bucket];
+        for k in 0..L2 {
+            let mut v = n.l2b[bucket][k];
+            for j in 0..L2_INPUTS { v += n.l2w[j][bucket][k] * h[j]; }
+            let v = v.clamp(0.0, 1.0);
+            out += n.l3w[k][bucket] * v * v;
+        }
+        (out * SCALE) as i32
+    }
+
     /// Incremental updates must exactly match a from-scratch refresh after every kind of move.
     #[test]
     fn incremental_matches_refresh() {
         attacks::init();
+        assert_eq!(std::mem::size_of::<Network>(), NET_BYTES.next_multiple_of(64));
+        assert_eq!(std::mem::offset_of!(Network, l2b),
+            (768 * HIDDEN + HIDDEN) * 2 + (HIDDEN * 8 * L1 + 8 * L1 + L2_INPUTS * 8 * L2) * 4);
         let mut seed = 0x1234_5678_9abc_def1u64;
         let mut rand = move || {
             seed ^= seed << 13;
@@ -381,7 +449,19 @@ mod tests {
             seed ^= seed << 17;
             seed
         };
-        let bytes: Vec<u8> = (0..NET_BYTES / 2).flat_map(|_| ((rand() % 101) as i16 - 50).to_le_bytes()).collect();
+        // Finite random layers, including both halves of the dual activation.
+        let mut bytes = Vec::with_capacity(NET_BYTES);
+        for _ in 0..(768 * HIDDEN + HIDDEN) {
+            bytes.extend_from_slice(&((rand() % 21) as i16 - 5).to_le_bytes());
+        }
+        for _ in 0..(NET_BYTES - bytes.len()) / 4 {
+            let v = ((rand() % 201) as i32 - 100) as f32 / 512.0;
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        assert!(from_bytes(&bytes[..bytes.len() - 1]).is_err());
+        let mut oversized = bytes.clone();
+        oversized.resize(NET_BYTES.next_multiple_of(64) + 1, 0);
+        assert!(from_bytes(&oversized).is_err());
         set_net(from_bytes(&bytes).unwrap());
 
         let fens = [
@@ -392,6 +472,7 @@ mod tests {
             "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
         ];
         let mut checked = 0;
+        let mut max_graph_error = 0;
         for fen in fens {
             for _ in 0..40 {
                 let mut b = Board::from_fen(fen).unwrap();
@@ -411,12 +492,19 @@ mod tests {
                     for p in 0..2 {
                         assert_eq!(next[p].vals, fresh[p].vals, "mismatch after {mv} in {}", b.to_fen());
                     }
+                    let reference = scalar_reference(&b, true);
+                    let graph = scalar_reference(&b, false);
+                    max_graph_error = max_graph_error.max((reference - graph).abs());
+                    assert_eq!(evaluate(&next, b.stm, b.occ().count_ones()), reference,
+                        "scalar forward mismatch: {}", b.to_fen());
                     acc = next;
                     checked += 1;
                 }
             }
         }
         assert!(checked > 10_000);
+        println!("{checked} positions; max trainer-graph approximation error {max_graph_error} cp");
+        assert!(max_graph_error <= 8, "unexpected quantisation error: {max_graph_error}");
     }
 }
 

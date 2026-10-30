@@ -16,3 +16,7 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 debug = false
+
+[features]
+default = []
+dualact = []
