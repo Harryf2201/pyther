@@ -162,3 +162,22 @@ as White, 7.Bg5 in the QGD exchange line).
 | v2.5 (v2.4 + matscale 400 + optimism 100) vs v2.4 at 40+0.4 (cloud) | +13.9 +/- 7.3 (1200 g) | Confirmed; on the bot since Oct 24 23:49 UTC | x25-cand |
 | Championship 9: Pyther 2.0/2.3/2.5 + Championship 8 field, round-robin 10+0.1, 100 g per pairing | Anchored: SF 3590, Plenty 3555, Rubi 3447, Pyther-2.5 3301, Pyther-2.3 3274, Pyther-2.0 3250 (2.0 was ~3236 in Championship 8) | v2.5 ~+50 over 2.0 against outside engines; first win vs full Stockfish | runs\2026-10-25_*Championship-9 |
 | Screens 3b-9 on v2.5 (8+0.08 gauntlets, 600-800 g per variant) | Winners: rfp95 +15.1, bundle6lite (SeDouble 12, Deeper 60, Probcut 150) +14.8, S2 (KingLmr 1 + LMR 60/280 + RFP 95 + LMP 6) +10.4, lhd10k +10.4, combo (KingLmr 1 + LMR 60/280) +10.4, evalmix (mat 200 + eval 110) +10.0. Losers: Codex batch (next-iteration -23.9, fh-blend -19.1, malus/good-capt -17, inc -14.8, escape -8.3), mat800 -35.3, corr minor/major -29.6, mat100 -11. HistPrune 1300 alone +10.9 but every stack containing it lost (-14, -15) | v2.5 prunes/reduces slightly too much; screen 10 combines S2 + bundle6lite (+ evalmix / clock lead) | specs x25-*, x25s/t/u/v/w/x-*, branch xsearch |
+
+## Oct 26-29: the big gen7 network (v2.6-dev), cloud-only decisions, gen8 starts
+
+From here on, search changes are judged on GitHub cloud games only: local PC results were distorted by CPU
+contention (and, found Oct 29, by Windows confining hidden below-normal processes to the E-cores).
+
+| Experiment | Result | Verdict | Where |
+|---|---|---|---|
+| x25y-c6 = v2.5 + S2 (KingLmr 1, LMR 60/280, RFP 95, LMP 6) + material scale 200 + eval scale 110, vs v2.5 | +5.1 +/- 5.0 (3600 g, 8+0.08, cloud); local 40+0.4 -39 +/- 48 (198 g) | Not adopted (small and unconfirmed); superseded by the big gen7 net | x25y-c6 |
+| Big gen7 net: all gen5-gen7 data (3.05B positions in 31 pre-shuffled files, new multi-file loader), 1024 multi-layer, 480 sb, WDL 0.55, in v2.5, vs v2.5 | +6.8 +/- 5.9 (3600 g, 8+0.08); +8.4 +/- 7.6 (1200 g, 40+0.4) | Kept as the dev baseline "v2.6-dev" (x25-big7); below the +10-20 release bar, so not on the bot | net-big7-1024-sb480, branch multiload |
+| 800 vs 480 superbatches (big7 data) | +1.5 +/- 5.7 (3600 g); -7.5 +/- 7.4 (1200 g, 40+0.4) | Dropped | x26d-sb800 (net-big7-1024-sb800) |
+| WDL 0.40 / 0.70 vs 0.55 (big7 data, 480 sb) | +3.1 +/- 5.7 / -4.4 +/- 5.8 (3600 g each) | 0.55 kept | x26d-w40, x26d-w70 |
+| Screen 11 on v2.6-dev (PC, 800 g each): SPSA run (1500 iterations) values, rfp95, c6, s2 | spsa +37.9 +/- 14.5; rfp95 -6.1; c6 -15.7; s2 -20.4 | SPSA values to cloud; the rest dropped | runs\2026-10-28_023802 |
+| SPSA values on v2.6-dev vs v2.6-dev | Cloud: +0.3 +/- 5.0 (3600 g, 8+0.08), -4.9 +/- 6.8 (1200 g, 40+0.4). PC: +49 +/- 17 (1544 g, 40+0.4) | Dropped: the PC gain was a CPU-overload artefact. spsa.ps1 rounding bug fixed (baf224d); a clean re-tune ran from Oct 29 and was stopped (not moving) | testing\spsa |
+| Newer data mix (80% big7 / 5% / 15% newest gen7) vs v2.6-dev | -9.2 +/- 5.8 (3600 g) | Dropped | x26d-mix |
+| SprKingLmr 1 on v2.6-dev | +3.4 +/- 5.2 (3600 g, 8+0.08); -2.6 +/- 7.3 (1200 g, 40+0.4) | Dropped | x26d-klmr1 |
+| 1536-wide big7 net (480 sb) vs v2.6-dev | -11.4 +/- 5.7 (3600 g, 8+0.08) | Dropped: too slow at this size; possible teacher for distillation later | x26d-w1536, branch w1536-train |
+| Gen8 data generation with the big7 net (all sources from Oct 29 ~10:30): GitHub, Oracle, PC (king-attack seeds) | ~420M positions by Oct 30 06:00 | Running; first gen8 net (gen8a: big7 data + 255M gen8) training Oct 30 | branch gen8-datagen, testing\coord\GEN8.md |
+| PC datagen throughput: Windows 11 EcoQoS had confined hidden below-normal datagen to the 8 E-cores | Opting out of power throttling (SetProcessInformation) more than doubled local datagen | Fixed in datagen-adapt.ps1 and the watchdog | gen8-datagen tools |
