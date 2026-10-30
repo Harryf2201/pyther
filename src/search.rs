@@ -1028,7 +1028,11 @@ impl Searcher {
         if !pv_node && !in_check && excluded.is_null() {
             // Reverse futility pruning: we're so far above beta that a shallow search won't change it.
             if depth <= p(P::RfpDepth) && eval - p(P::RfpMargin) * (depth - improving as i32) >= beta && eval < MATE_BOUND {
-                return eval;
+                return match p(P::SprRfpBlend) {
+                    1 => (eval + beta) / 2,
+                    2 => beta + (eval - beta) / 3,
+                    _ => eval,
+                };
             }
             // Razoring: hopelessly below alpha at low depth, just check captures.
             if depth <= 3 && eval + p(P::RazorMargin) * depth < alpha {

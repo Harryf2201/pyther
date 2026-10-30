@@ -75,6 +75,7 @@ params! {
     SprCorrLmr = 64, 0, 512;
     SprLazyScore = 0, 0, 1;
     SprPriorBonus = 0, 0, 200;
+    SprRfpBlend = 0, 0, 2;
     // Search sprint 4: each 0 = off.
     SprHindsight = 1, 0, 1;
     SprCaptFut = 0, 0, 400;
