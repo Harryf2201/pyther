@@ -18,8 +18,35 @@ const L2: usize = 32;
 const SCALE: f32 = 400.0;
 const QA: i32 = 255;
 
+#[cfg(feature = "kb4nm")]
+pub const INPUT_BUCKETS: usize = 4;
+#[cfg(not(feature = "kb4nm"))]
+pub const INPUT_BUCKETS: usize = 1;
+pub const NET_FILE_BYTES: usize = (NET_BYTES + 63) & !63;
+#[cfg(feature = "kb4nm")]
+const ARCHITECTURE: &str = "inputs=mlkb4nm\nhidden=1024\noutput_buckets=8\nresidual_scale=0.25\nmirrored=false\n";
+#[cfg(feature = "kb4nm")]
+static NET_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Four own-king zones, preserving absolute files. Black only rank-flips.
+#[cfg(feature = "kb4nm")]
+#[inline(always)]
+fn king_zone(ksq: usize) -> usize {
+    match ksq / 8 {
+        0 => usize::from((2..=5).contains(&(ksq % 8))),
+        1 => 2,
+        _ => 3,
+    }
+}
+#[cfg(feature = "kb4nm")]
+#[inline(always)]
+fn persp_zone(b: &Board, persp: usize) -> usize {
+    let ksq = (b.pieces[KING] & b.colors[persp]).trailing_zeros() as usize;
+    king_zone(ksq ^ if persp == BLACK { 56 } else { 0 })
+}
+
 /// Size of bullet's quantised output (it may be padded to a multiple of 64).
-pub const NET_BYTES: usize = (768 * HIDDEN + HIDDEN) * 2
+pub const NET_BYTES: usize = (768 * INPUT_BUCKETS * HIDDEN + HIDDEN) * 2
     + (HIDDEN * OUTPUT_BUCKETS * L1 + OUTPUT_BUCKETS * L1 + L1 * OUTPUT_BUCKETS * L2 + OUTPUT_BUCKETS * L2 + L2 * OUTPUT_BUCKETS + OUTPUT_BUCKETS) * 4;
 
 #[derive(Clone, Copy)]
@@ -30,7 +57,7 @@ pub struct Accumulator {
 
 #[repr(C)]
 pub struct Network {
-    feature_weights: [Accumulator; 768],
+    feature_weights: [Accumulator; 768 * INPUT_BUCKETS],
     feature_bias: Accumulator,
     // bullet's native (input-major) layout: for each input, the outputs of every bucket in a row.
     l1w: [[[f32; L1]; OUTPUT_BUCKETS]; HIDDEN],
@@ -72,11 +99,21 @@ fn set_net(net: &'static Network) {
         L1Q = Some(Box::leak(Box::new(L1Quant { w, mul })));
         NET = Some(net);
     }
+    #[cfg(feature = "kb4nm")]
+    NET_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
+fn validate_size(len: usize) -> Result<(), String> {
+    if len != NET_FILE_BYTES {
+        return Err(format!("network architecture/size mismatch: {len} bytes, expected exactly {NET_FILE_BYTES} ({}; 1024/16/32/1, QA255)", if cfg!(feature="kb4nm") { "mlkb4nm" } else { "ml" }));
+    }
+    Ok(())
+}
 fn from_bytes(bytes: &[u8]) -> Result<&'static Network, String> {
-    if bytes.len() < NET_BYTES {
-        return Err(format!("network file is {} bytes, expected at least {NET_BYTES}", bytes.len()));
+    validate_size(bytes.len())?;
+    let float_offset = (768 * INPUT_BUCKETS * HIDDEN + HIDDEN) * 2;
+    if bytes[float_offset..NET_BYTES].chunks_exact(4).any(|v| !f32::from_le_bytes(v.try_into().unwrap()).is_finite()) {
+        return Err("network contains nonfinite downstream weights".into());
     }
     unsafe {
         let layout = std::alloc::Layout::new::<Network>();
@@ -91,9 +128,38 @@ fn from_bytes(bytes: &[u8]) -> Result<&'static Network, String> {
 
 /// Loads the embedded network, if one was built in.
 pub fn init() {
-    if let Ok(net) = from_bytes(DEFAULT_NET) {
-        set_net(net);
+    match from_bytes(DEFAULT_NET) {
+        Ok(net) => {
+            set_net(net);
+            #[cfg(feature = "kb4nm")]
+            println!("info string embedded headerless net accepted as mlkb4nm by build contract; architecture provenance must be checked by the builder");
+        }
+        Err(_err) => {
+            #[cfg(feature = "kb4nm")]
+            if !DEFAULT_NET.is_empty() { println!("info string embedded network rejected: {_err}; load a matching KB4nm EvalFile before searching"); }
+        }
     }
+}
+
+/// Headerless mirrored KB4 has the same length: external KB nets require explicit provenance.
+#[cfg(feature = "kb4nm")]
+fn validate_architecture(path: &std::path::Path) -> Result<(), String> {
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let mut candidates = vec![std::path::PathBuf::from(format!("{}.architecture.txt", path.display())), dir.join("architecture.txt")];
+    if let Some(parent) = dir.parent() { candidates.push(parent.join("architecture.txt")); }
+    for marker in candidates {
+        match std::fs::read_to_string(&marker) {
+            Ok(text) => {
+                if text.replace("\r\n", "\n").trim() != ARCHITECTURE.trim() {
+                    return Err("network architecture mismatch: requires mlkb4nm/1024/8/r25/unmirrored; mirrored KB4 is incompatible".into());
+                }
+                return Ok(());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Err(e) => return Err(format!("cannot read network architecture manifest: {e}")),
+        }
+    }
+    Err("KB4nm network requires <net>.architecture.txt or architecture.txt in its checkpoint/parent directory; cannot distinguish mirrored KB4 by size".into())
 }
 
 /// Loads a network from disk (UCI option EvalFile). Not safe to call during a search.
@@ -106,6 +172,9 @@ pub fn load_file(path: &str) -> Result<(), String> {
         return Ok(());
     }
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    validate_size(bytes.len())?;
+    #[cfg(feature = "kb4nm")]
+    validate_architecture(std::path::Path::new(path))?;
     let net = from_bytes(&bytes)?;
     set_net(net);
     *loaded = path.to_string();
@@ -141,11 +210,15 @@ pub type AccPair = [Accumulator; 2];
 pub fn refresh(b: &Board, acc: &mut AccPair) {
     let net = net();
     for (persp, a) in acc.iter_mut().enumerate() {
+        #[cfg(feature = "kb4nm")]
+        let offset = 768 * persp_zone(b, persp);
+        #[cfg(not(feature = "kb4nm"))]
+        let offset = 0;
         *a = net.feature_bias;
         for sq in 0..64 {
             let pc = b.mailbox[sq];
             if pc != NO_PIECE {
-                let w = &net.feature_weights[feature(persp, pc as usize, sq)].vals;
+                let w = &net.feature_weights[offset + feature(persp, pc as usize, sq)].vals;
                 for (v, d) in a.vals.iter_mut().zip(w) {
                     *v += *d;
                 }
@@ -154,8 +227,74 @@ pub fn refresh(b: &Board, acc: &mut AccPair) {
     }
 }
 
+#[cfg(feature = "kb4nm")]
+#[derive(Clone)]
+struct CacheEntry {
+    acc: Accumulator,
+    bbs: [u64; 12],
+}
+
+/// One thread owns eight entries: 2 perspectives x 4 zones, no mirror dimension.
+#[cfg(feature = "kb4nm")]
+pub struct AccCache {
+    generation: u64,
+    entries: Box<[CacheEntry]>,
+}
+#[cfg(feature = "kb4nm")]
+impl Default for AccCache {
+    fn default() -> Self {
+        Self { generation: u64::MAX, entries: vec![CacheEntry { acc: Accumulator { vals: [0; HIDDEN] }, bbs: [0; 12] }; 8].into_boxed_slice() }
+    }
+}
+#[cfg(feature = "kb4nm")]
+impl AccCache {
+    fn refresh_one(&mut self, b: &Board, persp: usize, out: &mut Accumulator) {
+        let net = net();
+        let generation = NET_GEN.load(std::sync::atomic::Ordering::Relaxed);
+        if generation != self.generation {
+            for e in self.entries.iter_mut() { e.acc = net.feature_bias; e.bbs = [0; 12]; }
+            self.generation = generation;
+        }
+        let zone = persp_zone(b, persp);
+        let e = &mut self.entries[persp * 4 + zone];
+        for pc in 0..12 {
+            let cur = b.pieces[pc % 6] & b.colors[pc / 6];
+            let (mut add, mut sub) = (cur & !e.bbs[pc], e.bbs[pc] & !cur);
+            while add != 0 {
+                let w = &net.feature_weights[768 * zone + feature(persp, pc, add.trailing_zeros() as usize)].vals;
+                for (v, d) in e.acc.vals.iter_mut().zip(w) { *v += *d; }
+                add &= add - 1;
+            }
+            while sub != 0 {
+                let w = &net.feature_weights[768 * zone + feature(persp, pc, sub.trailing_zeros() as usize)].vals;
+                for (v, d) in e.acc.vals.iter_mut().zip(w) { *v -= *d; }
+                sub &= sub - 1;
+            }
+            e.bbs[pc] = cur;
+        }
+        *out = e.acc;
+    }
+}
+
+#[cfg(feature = "kb4nm")]
+fn refresh_one(b: &Board, persp: usize, out: &mut Accumulator) {
+    let net = net();
+    *out = net.feature_bias;
+    let zone = persp_zone(b, persp);
+    for sq in 0..64 {
+        let pc = b.mailbox[sq];
+        if pc != NO_PIECE {
+            let w = &net.feature_weights[768 * zone + feature(persp, pc as usize, sq)].vals;
+            for (v, d) in out.vals.iter_mut().zip(w) { *v += *d; }
+        }
+    }
+}
+
 /// Computes the child's accumulators from the parent's for `mv` played in position `b`.
-pub fn update(b: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
+pub fn update(b: &Board, mv: Move, parent: &AccPair, child: &mut AccPair,
+    #[cfg(feature = "kb4nm")] after: &Board,
+    #[cfg(feature = "kb4nm")] cache: &mut AccCache,
+) {
     let (from, to) = (mv.from(), mv.to());
     let us = b.stm;
     let moved = b.mailbox[from] as usize;
@@ -183,13 +322,25 @@ pub fn update(b: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
 
     let net = net();
     for persp in 0..2 {
+        #[cfg(feature = "kb4nm")]
+        let offset = {
+            let zone = persp_zone(b, persp);
+            if persp == us && moved % 6 == KING && persp_zone(after, persp) != zone {
+                if cfg!(feature = "kb-refresh-only") { refresh_one(after, persp, &mut child[persp]); }
+                else { cache.refresh_one(after, persp, &mut child[persp]); }
+                continue;
+            }
+            768 * zone
+        };
+        #[cfg(not(feature = "kb4nm"))]
+        let offset = 0;
         let add: [&[i16; HIDDEN]; 2] = [
-            &net.feature_weights[feature(persp, adds[0].0, adds[0].1)].vals,
-            &net.feature_weights[feature(persp, adds[1].0, adds[1].1)].vals,
+            &net.feature_weights[offset + feature(persp, adds[0].0, adds[0].1)].vals,
+            &net.feature_weights[offset + feature(persp, adds[1].0, adds[1].1)].vals,
         ];
         let sub: [&[i16; HIDDEN]; 2] = [
-            &net.feature_weights[feature(persp, subs[0].0, subs[0].1)].vals,
-            &net.feature_weights[feature(persp, subs[1].0, subs[1].1)].vals,
+            &net.feature_weights[offset + feature(persp, subs[0].0, subs[0].1)].vals,
+            &net.feature_weights[offset + feature(persp, subs[1].0, subs[1].1)].vals,
         ];
         let src = &parent[persp].vals;
         let dst = &mut child[persp].vals;
@@ -381,7 +532,12 @@ mod tests {
             seed ^= seed << 17;
             seed
         };
-        let bytes: Vec<u8> = (0..NET_BYTES / 2).flat_map(|_| ((rand() % 101) as i16 - 50).to_le_bytes()).collect();
+        let mut bytes = vec![0u8; NET_FILE_BYTES];
+        for v in bytes[..(768 * INPUT_BUCKETS * HIDDEN + HIDDEN) * 2].chunks_exact_mut(2) {
+            v.copy_from_slice(&((rand() % 101) as i16 - 50).to_le_bytes());
+        }
+        assert!(from_bytes(&bytes[..bytes.len()-1]).is_err());
+        assert!(validate_size(if cfg!(feature="kb4nm") { 2_118_208 } else { 6_836_800 }).is_err());
         set_net(from_bytes(&bytes).unwrap());
 
         let fens = [
@@ -390,8 +546,18 @@ mod tests {
             "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
             "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
             "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+            "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1",
+            "r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1",
+            "4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1",
+            "4k3/P7/8/8/8/8/7p/4K3 w - - 0 1",
+            "4k3/P7/8/8/8/8/7p/4K3 b - - 0 1",
         ];
         let mut checked = 0;
+        let (mut castles, mut eps, mut promos, mut nulls) = (0,0,0,0);
+        #[cfg(feature = "kb4nm")]
+        let mut cache = AccCache::default();
+        #[cfg(feature = "kb4nm")]
+        let mut crossings = 0;
         for fen in fens {
             for _ in 0..40 {
                 let mut b = Board::from_fen(fen).unwrap();
@@ -402,9 +568,44 @@ mod tests {
                     if moves.is_empty() {
                         break;
                     }
+                    // Revisit the same parent after sibling updates, including forced special moves.
+                    if checked % 37 == 0 || checked == 0 {
+                        for mv in moves.iter().copied() {
+                            let mut after = b; after.make_move(mv);
+                            let mut next = acc;
+                            update(&b, mv, &acc, &mut next,
+                                #[cfg(feature = "kb4nm")] &after,
+                                #[cfg(feature = "kb4nm")] &mut cache,
+                            );
+                            let mut fresh = acc; refresh(&after, &mut fresh);
+                            for p in 0..2 {assert_eq!(next[p].vals, fresh[p].vals);}
+                            castles += usize::from(mv.is_castle()); eps += usize::from(mv.is_ep()); promos += usize::from(mv.is_promo());
+                        }
+                    }
+                    if checked % 17 == 0 && !b.in_check() {
+                        let mut nb=b; nb.make_null();
+                        let mut fresh=acc; refresh(&nb,&mut fresh);
+                        for p in 0..2 {assert_eq!(acc[p].vals,fresh[p].vals);}
+                        if let Some(nmv)=nb.legal_moves().first().copied() {
+                            let mut after=nb;after.make_move(nmv);let mut next=acc;
+                            update(&nb,nmv,&acc,&mut next,
+                                #[cfg(feature = "kb4nm")] &after,
+                                #[cfg(feature = "kb4nm")] &mut cache,
+                            );
+                            refresh(&after,&mut fresh);for p in 0..2 {assert_eq!(next[p].vals,fresh[p].vals);}
+                        }
+                        nulls += 1;
+                    }
                     let mv = moves[(rand() % moves.len() as u64) as usize];
                     let mut next = [Accumulator { vals: [0; HIDDEN] }; 2];
-                    update(&b, mv, &acc, &mut next);
+                    let mut after=b; after.make_move(mv);
+                    #[cfg(feature = "kb4nm")]
+                    { crossings += usize::from(persp_zone(&b,b.stm)!=persp_zone(&after,b.stm)); }
+                    update(&b, mv, &acc, &mut next,
+                        #[cfg(feature = "kb4nm")] &after,
+                        #[cfg(feature = "kb4nm")] &mut cache,
+                    );
+                    castles += usize::from(mv.is_castle()); eps += usize::from(mv.is_ep()); promos += usize::from(mv.is_promo());
                     b.make_move(mv);
                     let mut fresh = [Accumulator { vals: [0; HIDDEN] }; 2];
                     refresh(&b, &mut fresh);
@@ -417,6 +618,36 @@ mod tests {
             }
         }
         assert!(checked > 10_000);
+        assert!(castles>0 && eps>0 && promos>0 && nulls>0);
+        println!("{checked} random moves plus sibling revisits; castles {castles}, EP {eps}, promotions {promos}, nulls {nulls}");
+        #[cfg(feature = "kb4nm")]
+        {
+            assert!(crossings>100);
+            // Visit every king square from both colours and reuse cache entries across unrelated boards.
+            let mut boundary_moves=0;
+            for side in [WHITE,BLACK] {for king in 0usize..64 {
+                let far=|s:usize| (s%8).abs_diff(king%8).max((s/8).abs_diff(king/8))>=3;
+                let other=if far(0){0}else{63};let mut fen=String::new();
+                for rank in (0..8).rev(){let mut empty=0;for file in 0..8 {
+                    let sq=rank*8+file;let pc=if sq==king{if side==WHITE{'K'}else{'k'}}else if sq==other{if side==WHITE{'k'}else{'K'}}else{' '};
+                    if pc==' '{empty+=1;}else{if empty>0{fen.push(char::from_digit(empty,10).unwrap());empty=0;}fen.push(pc);}
+                }if empty>0{fen.push(char::from_digit(empty,10).unwrap());}if rank>0{fen.push('/');}}
+                fen+=&format!(" {} - - 0 1",if side==WHITE{"w"}else{"b"});
+                let b=Board::from_fen(&fen).unwrap();let mut acc=[Accumulator{vals:[0;HIDDEN]};2];refresh(&b,&mut acc);
+                for mv in b.legal_moves(){let mut after=b;after.make_move(mv);let mut next=acc;
+                    update(&b,mv,&acc,&mut next,&after,&mut cache);let mut fresh=acc;refresh(&after,&mut fresh);
+                    for p in 0..2 {assert_eq!(next[p].vals,fresh[p].vals);}boundary_moves+=1;
+                }
+            }}
+            // Stale cache entries must be discarded when any new network becomes active.
+            let b=Board::startpos();let mut cached=[Accumulator{vals:[0;HIDDEN]};2];
+            for (p,a) in cached.iter_mut().enumerate(){cache.refresh_one(&b,p,a);}
+            for v in bytes[..(768 * INPUT_BUCKETS * HIDDEN + HIDDEN)*2].chunks_exact_mut(2){let x=i16::from_le_bytes(v.try_into().unwrap());v.copy_from_slice(&(-x+1).to_le_bytes());}
+            set_net(from_bytes(&bytes).unwrap());let mut fresh=cached;refresh(&b,&mut fresh);
+            assert_ne!(cached[0].vals,fresh[0].vals);
+            for (p,a) in cached.iter_mut().enumerate(){cache.refresh_one(&b,p,a);assert_eq!(a.vals,fresh[p].vals);}
+            println!("zone crossings {crossings}, exhaustive king moves {boundary_moves}, cache generation invalidation passed");
+        }
     }
 }
 

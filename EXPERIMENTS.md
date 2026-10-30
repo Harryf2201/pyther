@@ -249,3 +249,18 @@ SprMatScale=400 + SprOptimism=100: 240939 nodes, both exact reference parity. Ea
 completed depth 10 at its suggested value with clocks/increments supplied. Searches ran
 below normal priority. Local verification script and logs: ignored target/verify-xsearch.ps1
 and target/xsearch-*.log. No ARM or playing-strength tests run.
+
+## Oct 30: speculative unmirrored KB4 engine port (kbengine/kbengine-cloud)
+
+Cargo `kb4nm` (off by default on kbengine, on by default on kbengine-cloud)
+implements the trainer's merged mlkb4nm FT, eight per-thread Finny entries and
+generation invalidation. `kb-refresh-only` is a diagnostic alternative. Strict
+padded file size and external architecture sidecars reject incompatible nets;
+embedded headerless KB provenance remains the builder's responsibility.
+Plain mode matched xsearch5 on all 12 bench FENs with x25-big7 net/options at
+depth 12: 275815 nodes each, same scores and best moves. CPU random/special/null/
+cache/zone tests pass; 4000 smoke-net evaluations agree exactly across native,
+AVX2-only and scalar, with .303 cp mean/.840 cp p95 error versus float checkpoint.
+Paired smoke-net NPS ratios Finny/full-refresh: 1.028 native, 1.038 AVX2-only,
+both noisy confidence intervals include 1. No full-net strength or ARM claim.
+See KB_ENGINE.md and testing/coord/kb-audit/engine-port for commands/evidence.
