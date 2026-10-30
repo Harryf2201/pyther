@@ -198,6 +198,7 @@ pub struct Searcher {
     cont2: Vec<i32>,
     /// Quiet-move history by pawn structure (pawn_key % PAWN_HIST), piece and destination.
     pawn_hist: Vec<i32>,
+    countermoves: [Move; 768],
     low_ply: Box<[[[i32; 64]; 64]; 4]>,
     killers: [[Move; 2]; MAX_PLY + 2],
     stack: [PlyInfo; MAX_PLY + 4],
@@ -362,6 +363,7 @@ impl Searcher {
             cont1: vec![0; 768 * 768],
             cont2: vec![0; 768 * 768],
             pawn_hist: vec![0; PAWN_HIST * 768],
+            countermoves: [Move::NULL; 768],
             low_ply: Box::new([[[0; 64]; 64]; 4]),
             killers: [[Move::NULL; 2]; MAX_PLY + 2],
             stack: [PlyInfo::default(); MAX_PLY + 4],
@@ -403,6 +405,7 @@ impl Searcher {
         self.cont1.fill(0);
         self.cont2.fill(0);
         self.pawn_hist.fill(0);
+        self.countermoves.fill(Move::NULL);
         *self.low_ply = [[[0; 64]; 64]; 4];
         self.killers = [[Move::NULL; 2]; MAX_PLY + 2];
         for side in self.corr.iter_mut().chain(self.cont_corr.iter_mut()) {
@@ -708,6 +711,9 @@ impl Searcher {
                 if p(P::SprLowPly) > 0 && ply < 4 {
                     score += self.low_ply[ply][mv.from()][mv.to()] / (ply as i32 + 1);
                 }
+                if p(P::SprCountermove) > 0 && self.prev_cont(ply, 1) != NO_CONT
+                    && mv == self.countermoves[self.prev_cont(ply, 1)]
+                { score += 1_000_000; }
                 if escape > 0 {
                     let pt = b.mailbox[mv.from()] as usize % 6;
                     let attacked = cheaper[pt];
@@ -719,9 +725,27 @@ impl Searcher {
         }
     }
 
+    /// Freeze numeric search inputs at scoring time: child searches can change histories.
+    fn snapshot_search_scores(&self, list: &MoveList, scores: &[i32; 256],
+        base: &mut [i32; 256], tt_move: Move, ply: usize, low_ply: bool, countermove: bool)
+    {
+        *base = *scores;
+        for i in 0..list.len {
+            let mv = list.moves[i];
+            if mv.is_quiet() && mv != tt_move && !self.killers[ply].contains(&mv) {
+                if low_ply && ply < 4 {
+                    base[i] -= self.low_ply[ply][mv.from()][mv.to()] / (ply as i32 + 1);
+                }
+                if countermove && self.prev_cont(ply, 1) != NO_CONT
+                    && mv == self.countermoves[self.prev_cont(ply, 1)]
+                { base[i] -= 1_000_000; }
+            }
+        }
+    }
+
     /// Selection sort step: brings the best remaining move to index i.
     #[inline(always)]
-    fn pick(list: &mut MoveList, scores: &mut [i32; 256], i: usize, see: Option<&mut [Option<bool>; 256]>) -> Move {
+    fn pick(list: &mut MoveList, scores: &mut [i32; 256], i: usize, see: Option<&mut [Option<bool>; 256]>, base: Option<&mut [i32; 256]>) -> Move {
         let mut best = i;
         for j in i + 1..list.len {
             if scores[j] > scores[best] {
@@ -731,6 +755,7 @@ impl Searcher {
         if let Some(cache) = see {
             cache.swap(i, best);
         }
+        if let Some(base) = base { base.swap(i, best); }
         list.moves.swap(i, best);
         scores.swap(i, best);
         list.moves[i]
@@ -1108,7 +1133,7 @@ impl Searcher {
                 let mut scores = [0i32; 256];
                 self.score_moves(b, &list, &mut scores, tt_move, ply, 0, &rows, None);
                 for i in 0..list.len {
-                    let mv = Self::pick(&mut list, &mut scores, i, None);
+                    let mv = Self::pick(&mut list, &mut scores, i, None, None);
                     if !b.is_legal(mv) || !b.see(mv, pc_beta - static_eval) {
                         continue;
                     }
@@ -1147,12 +1172,16 @@ impl Searcher {
         // Sprint: with a TT move in the list, search it first and score the other moves only if it does not cut
         // off (most cut-nodes then skip scoring altogether).
         let mut scored = false;
+        let mut search_scores = [0i32; 256];
+        let ordering_only = p(P::SprLowPly) > 0 || p(P::SprCountermove) > 0;
         let tt_at = if p(P::SprLazyScore) > 0 && !tt_move.is_null() { list.moves[..list.len].iter().position(|&m| m == tt_move) } else { None };
         if let Some(k) = tt_at {
             list.moves.swap(0, k);
             scores[0] = 10_000_000;
+            search_scores[0] = 10_000_000;
         } else {
             self.score_moves(b, &list, &mut scores, tt_move, ply, threats, &rows, None);
+            if ordering_only { self.snapshot_search_scores(&list, &scores, &mut search_scores, tt_move, ply, p(P::SprLowPly) > 0, p(P::SprCountermove) > 0); }
             scored = true;
         }
 
@@ -1168,19 +1197,16 @@ impl Searcher {
         for i in 0..list.len {
             if i == 1 && !scored {
                 self.score_moves(b, &list, &mut scores, tt_move, ply, threats, &rows, None);
+                if ordering_only { self.snapshot_search_scores(&list, &scores, &mut search_scores, tt_move, ply, p(P::SprLowPly) > 0, p(P::SprCountermove) > 0); }
                 scored = true;
             }
-            let mv = Self::pick(&mut list, &mut scores, i, None);
+            let mv = Self::pick(&mut list, &mut scores, i, None,
+                if ordering_only { Some(&mut search_scores) } else { None });
             if mv == excluded || !b.is_legal(mv) {
                 continue;
             }
             let is_quiet = mv.is_quiet();
-            // Remove ordering-only terms before pruning/LMR consume the selected score.
-            if p(P::SprLowPly) > 0 && ply < 4 && is_quiet && mv != tt_move
-                && !self.killers[ply].contains(&mv)
-            {
-                scores[i] -= self.low_ply[ply][mv.from()][mv.to()] / (ply as i32 + 1);
-            }
+            if ordering_only { scores[i] = search_scores[i]; }
             if is_quiet && skip_quiets {
                 continue;
             }
@@ -1359,6 +1385,9 @@ impl Searcher {
                         let malus_pct = p(P::SprHistMalusPct);
                         let malus = if malus_pct == 0 { -bonus } else { -bonus * malus_pct / 100 };
                         if is_quiet {
+                            if p(P::SprCountermove) > 0 && self.prev_cont(ply, 1) != NO_CONT {
+                                self.countermoves[self.prev_cont(ply, 1)] = mv;
+                            }
                             if self.killers[ply][0] != mv {
                                 self.killers[ply][1] = self.killers[ply][0];
                                 self.killers[ply][0] = mv;
@@ -1501,7 +1530,7 @@ impl Searcher {
         let mut legal = 0;
         let futility = if in_check { NO_EVAL } else { best + p(P::QsFutility) };
         for i in 0..list.len {
-            let mv = Self::pick(&mut list, &mut scores, i, Some(&mut see));
+            let mv = Self::pick(&mut list, &mut scores, i, Some(&mut see), None);
             if !b.is_legal(mv) {
                 continue;
             }
@@ -1546,5 +1575,35 @@ impl Searcher {
         let bound = if best >= beta { BOUND_LOWER } else { BOUND_UPPER };
         self.tt.store(b.hash, best_move, score_to_tt(best, ply), raw_eval, 0, bound, pv_node || tt_entry.is_some_and(|e| e.pv));
         best
+    }
+}
+
+#[cfg(test)]
+mod sprint12_ordering_tests {
+    use super::*;
+
+    #[test]
+    fn ordering_snapshot_survives_history_updates_and_selection_swaps() {
+        let mut s = Searcher::new(Arc::new(TT::new(1)), Arc::new(AtomicBool::new(false)));
+        let first = Move::new(12, 28, 0);
+        let second = Move::new(11, 27, 0);
+        let mut list = MoveList::new();
+        list.push(first);
+        list.push(second);
+        s.stack[0].cont = 10;
+        s.countermoves[10] = second;
+        s.low_ply[1][12][28] = 200;
+        s.low_ply[1][11][27] = 400;
+        let mut scores = [0; 256];
+        scores[0] = 110; // base 10 + low-ply 100
+        scores[1] = 1_000_220; // base 20 + low-ply 200 + countermove
+        let mut base = [0; 256];
+        s.snapshot_search_scores(&list, &scores, &mut base, Move::NULL, 1, true, true);
+        assert_eq!(&base[..2], &[10, 20]);
+        // Simulate intervening child searches changing both histories.
+        s.low_ply[1][11][27] = -1000;
+        s.countermoves[10] = first;
+        assert_eq!(Searcher::pick(&mut list, &mut scores, 0, None, Some(&mut base)), second);
+        assert_eq!(&base[..2], &[20, 10]);
     }
 }
