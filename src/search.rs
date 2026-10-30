@@ -198,6 +198,7 @@ pub struct Searcher {
     cont2: Vec<i32>,
     /// Quiet-move history by pawn structure (pawn_key % PAWN_HIST), piece and destination.
     pawn_hist: Vec<i32>,
+    low_ply: Box<[[[i32; 64]; 64]; 4]>,
     killers: [[Move; 2]; MAX_PLY + 2],
     stack: [PlyInfo; MAX_PLY + 4],
     pv: Box<[[Move; MAX_PLY + 1]; MAX_PLY + 1]>,
@@ -360,6 +361,7 @@ impl Searcher {
             cont1: vec![0; 768 * 768],
             cont2: vec![0; 768 * 768],
             pawn_hist: vec![0; PAWN_HIST * 768],
+            low_ply: Box::new([[[0; 64]; 64]; 4]),
             killers: [[Move::NULL; 2]; MAX_PLY + 2],
             stack: [PlyInfo::default(); MAX_PLY + 4],
             pv: Box::new([[Move::NULL; MAX_PLY + 1]; MAX_PLY + 1]),
@@ -399,6 +401,7 @@ impl Searcher {
         self.cont1.fill(0);
         self.cont2.fill(0);
         self.pawn_hist.fill(0);
+        *self.low_ply = [[[0; 64]; 64]; 4];
         self.killers = [[Move::NULL; 2]; MAX_PLY + 2];
         for side in self.corr.iter_mut().chain(self.cont_corr.iter_mut()) {
             side.fill(0);
@@ -609,7 +612,10 @@ impl Searcher {
         s
     }
 
-    fn update_quiet(&mut self, b: &Board, mv: Move, rows: &HistoryRows, bonus: i32, threats: u64) {
+    fn update_quiet(&mut self, b: &Board, mv: Move, rows: &HistoryRows, bonus: i32, threats: u64, ply: usize) {
+        if p(P::SprLowPly) > 0 && ply < 4 {
+            gravity(&mut self.low_ply[ply][mv.from()][mv.to()], bonus);
+        }
         let idx = b.mailbox[mv.from()] as usize * 64 + mv.to();
         let (tf, tt) = ((threats >> mv.from()) as usize & 1, (threats >> mv.to()) as usize & 1);
         gravity(&mut self.butterfly[b.stm][tf][tt][mv.from()][mv.to()], bonus);
@@ -697,6 +703,9 @@ impl Searcher {
                 2_000_000
             } else {
                 let mut score = self.quiet_history(b, mv, rows, threats);
+                if p(P::SprLowPly) > 0 && ply < 4 {
+                    score += self.low_ply[ply][mv.from()][mv.to()] / (ply as i32 + 1);
+                }
                 if escape > 0 {
                     let pt = b.mailbox[mv.from()] as usize % 6;
                     let attacked = cheaper[pt];
@@ -944,7 +953,7 @@ impl Searcher {
                 {
                     let bonus = (p(P::HistBonusMul) * depth - 50).min(p(P::HistBonusMax));
                     let threats = b.threats(b.stm ^ 1);
-                    self.update_quiet(b, tt_move, &self.history_rows(pawn_key(b), ply), bonus, threats);
+                    self.update_quiet(b, tt_move, &self.history_rows(pawn_key(b), ply), bonus, threats, ply);
                 }
                 return s;
             }
@@ -1163,6 +1172,12 @@ impl Searcher {
                 continue;
             }
             let is_quiet = mv.is_quiet();
+            // Remove ordering-only terms before pruning/LMR consume the selected score.
+            if p(P::SprLowPly) > 0 && ply < 4 && is_quiet && mv != tt_move
+                && !self.killers[ply].contains(&mv)
+            {
+                scores[i] -= self.low_ply[ply][mv.from()][mv.to()] / (ply as i32 + 1);
+            }
             if is_quiet && skip_quiets {
                 continue;
             }
@@ -1296,7 +1311,7 @@ impl Searcher {
                     // Sprint: a quiet move's re-search result feeds straight back into its history.
                     if is_quiet && p(P::SprLmrRes) > 0 && !self.stopped {
                         let bonus = (p(P::HistBonusMul) * new_depth - 50).min(p(P::HistBonusMax)) * p(P::SprLmrRes) / 64;
-                        self.update_quiet(b, mv, &rows, if s > alpha { bonus } else { -bonus }, threats);
+                        self.update_quiet(b, mv, &rows, if s > alpha { bonus } else { -bonus }, threats, ply);
                     }
                 }
                 if s > alpha && s < beta {
@@ -1334,9 +1349,9 @@ impl Searcher {
                                 self.killers[ply][1] = self.killers[ply][0];
                                 self.killers[ply][0] = mv;
                             }
-                            self.update_quiet(b, mv, &rows, bonus, threats);
+                            self.update_quiet(b, mv, &rows, bonus, threats, ply);
                             for &q in &quiets[..n_quiets] {
-                                self.update_quiet(b, q, &rows, malus, threats);
+                                self.update_quiet(b, q, &rows, malus, threats, ply);
                             }
                         } else if mv.is_capture() {
                             gravity(self.capt_entry(b, mv), bonus);
