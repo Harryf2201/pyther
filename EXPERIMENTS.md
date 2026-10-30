@@ -333,3 +333,28 @@ version bump. NNUE arithmetic/float order unchanged; no board changes.
 Claude must compile/test/time the new NEON sparse mask/index/dotprod loop and
 its widening fallback on ARM. No measured N1 or EPYC gain claimed.
 Raw sources, scripts, logs and JSON: ../testing/speed2/r2-*.
+### speed2 follow-up: lazy accumulator trial rejected, total AVX2-only result
+
+Tried lazy normal/null accumulators after the sparse L1 commit. Stored four-byte
+move/piece/capture descriptors and dirty flags (no Board pointers), materialized
+parent chains only when needed. Separate counters found 8,480,601 normal stages
+vs 7,542,392 applications, and 491,068 null stages vs 364,187 copies: 11.87%
+combined unused. Despite those savings, six position-interleaved AVX2-only pairs
+regressed: 1,499,935 -> 1,403,348 median NPS (-6.44%), paired median -6.43%
+[-7.72%..-5.37%]. CPU paired -9.33%. All six pairs slower. Rejected and removed;
+source/patch/counter scripts retained only in ../testing/speed2/r2-lazy*.
+The rejected trial nevertheless passed ten release tests and all 12 depth-20
+nodes/scores/best/ponder comparisons plus bench in native, AVX2-only and scalar.
+
+Final retained source is bb1e378 (aligned sparse L1). Direct total comparison
+against AVX2-only 94f4385, six whole-suite pairs: 1,323,204 median NPS
+[1,190,830..1,436,499] -> 1,429,644 [1,279,911..1,521,916], +8.04% ratio of
+medians; paired median +6.71% [+2.66%..+16.39%], all six positive. CPU median
+ratio +6.48%, paired +4.15% [+1.84%..+12.68%]. These Intel-PC results with VNNI
+disabled do not establish EPYC or N1 gains; both still need deployment verification.
+Native, AVX2-only and scalar build outputs were restored to the retained source;
+rebuilds differ from verified binaries only in linker/debug metadata, with all
+machine code and computational data identical. Final retained candidate: nine
+release tests and complete depth-20/bench parity in all three builds. No board
+changes, new UCI options, version bump, cloud tests or remote operations.
+Detailed report/reproduction: ../testing/coord/codex-speed2-avx2-report-2026-10-30.md.
