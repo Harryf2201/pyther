@@ -249,3 +249,47 @@ SprMatScale=400 + SprOptimism=100: 240939 nodes, both exact reference parity. Ea
 completed depth 10 at its suggested value with clocks/increments supplied. Searches ran
 below normal priority. Local verification script and logs: ignored target/verify-xsearch.ps1
 and target/xsearch-*.log. No ARM or playing-strength tests run.
+
+## Oct 30: speed2, exact 1024-wide integer L1 dot kernel
+
+Branch `speed2`, parent `xsearch` / `94f4385`. Only retained implementation change:
+`src/nnue.rs::dot_u8_i8` uses four independent integer sums, with AVX-VNNI
+`vpdpbusd` when enabled by the build target. AVX2 fallback, NEON dotprod/widening
+fallback, and scalar code traverse matching 128-input blocks. Floating-point
+layers, weights, quantisation, search, and UCI options are unchanged.
+
+Profile first: temporary cycle scopes, then a 1/64 sampled/calibrated baseline
+profile, depth 20 on eight bench positions with x25-big7 plus every supplied
+option. Approximate inclusive shares: accumulator update/copy 11-22%, NNUE
+28-45% (L1 dot products 14-22%), generation 3-5%, legality 4-11%, SEE 5-9%,
+TT 2-6%, move scoring 9-11% (overlaps SEE), history/correction updates 2-6%.
+Timer overhead and scheduling make these estimates, not additive accounting.
+
+Final confirmation: six alternating pairs, 12 FENs, depth 20, Threads=1,
+Hash=16, fresh TT/history per position, CPU 0, BelowNormal, process power
+throttling disabled. Rebuilt baseline median 1,331,274 NPS (range
+1,303,534-1,352,328); candidate 1,400,180 (1,342,471-1,463,126): +5.18%
+ratio of medians. Paired median +5.61%, range +1.32% to +9.98%, six of six
+positive. An earlier independent six-pair sample had paired median +5.99%
+(range -10.58% to +39.32%, stronger scheduling noise). CPU-time paired medians
+were +6.43% and +6.32%, respectively. These are PC measurements, not ARM gains.
+
+Rejected, not retained: 64-byte accumulator-frame padding (six pairs, -1.55%
+ratio of medians); i16 continuation/pawn histories (first six +4.69%, second
+six -2.22% wall / -3.36% CPU; not reproducibly faster). PGO skipped; no i8-weight
+or sparse-L1 retrial. No search changes, new UCI options, or version bump.
+
+Parity against pawnstorm-xsearch5.exe, x25-big7 and options: all 12 depth-20
+nodes/scores/bestmoves match for native VNNI and AVX2 fallback; bench matches
+9,393,267 nodes. Scalar matches all 12 reference depth-16 searches (1,991,562
+nodes). Eight release tests pass in all three builds, including adversarial
+and randomized integer-dot differential tests. All six standard perfts pass.
+Integer magnitude is bounded by 1024*127*128 = 16,646,144, so integer
+reassociation cannot overflow and AVX2 pair sums cannot saturate.
+
+Claude must compile/test/time the changed NEON `dot_u8_i8` loop (128 stride,
+two 16-byte loads per stream), both dotprod and widening paths, on ARM; require
+matching searches there. No ARM speed/Elo claim. PC gain would suggest about
+3-4 Elo under the round's rough heuristic; no matches were run.
+Full report, binaries, scripts, JSON samples, profiling sources, and logs:
+`../testing/speed2/` and `../testing/coord/codex-speed2-report-2026-10-30.md`.

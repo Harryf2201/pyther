@@ -273,16 +273,25 @@ fn pairwise_inputs(v: &[i16; HIDDEN], out: &mut [u8]) {
 fn dot_u8_i8(x: &[u8; HIDDEN], w: &[i8]) -> i32 {
     use std::arch::x86_64::*;
     unsafe {
+        #[cfg(not(target_feature = "avxvnni"))]
         let ones = _mm256_set1_epi16(1);
-        let mut sum = _mm256_setzero_si256();
+        let mut sums = [_mm256_setzero_si256(); 4];
         let mut i = 0;
         while i < HIDDEN {
-            let xv = _mm256_load_si256(x.as_ptr().add(i) as *const __m256i);
-            let wv = _mm256_loadu_si256(w.as_ptr().add(i) as *const __m256i);
-            // u8 * i8 pairs summed into i16 (at most 2 * 127 * 127, no saturation), then into i32.
-            sum = _mm256_add_epi32(sum, _mm256_madd_epi16(_mm256_maddubs_epi16(xv, wv), ones));
-            i += 32;
+            for (k, sum) in sums.iter_mut().enumerate() {
+                let xv = _mm256_load_si256(x.as_ptr().add(i + 32 * k) as *const __m256i);
+                let wv = _mm256_loadu_si256(w.as_ptr().add(i + 32 * k) as *const __m256i);
+                #[cfg(target_feature = "avxvnni")]
+                { *sum = _mm256_dpbusd_avx_epi32(*sum, xv, wv); }
+                #[cfg(not(target_feature = "avxvnni"))]
+                {
+                    // Inputs <=127: pair sums fit i16, so maddubs never saturates.
+                    *sum = _mm256_add_epi32(*sum, _mm256_madd_epi16(_mm256_maddubs_epi16(xv, wv), ones));
+                }
+            }
+            i += 128;
         }
+        let sum = _mm256_add_epi32(_mm256_add_epi32(sums[0], sums[1]), _mm256_add_epi32(sums[2], sums[3]));
         let s = _mm_add_epi32(_mm256_castsi256_si128(sum), _mm256_extracti128_si256::<1>(sum));
         let s = _mm_add_epi32(s, _mm_shuffle_epi32::<0b01_00_11_10>(s));
         let s = _mm_add_epi32(s, _mm_shuffle_epi32::<0b10_11_00_01>(s));
@@ -301,21 +310,23 @@ fn dot_u8_i8(x: &[u8; HIDDEN], w: &[i8]) -> i32 {
         let mut i = 0;
         while i < HIDDEN {
             for (k, sk) in s.iter_mut().enumerate() {
-                let xv = vreinterpretq_s8_u8(vld1q_u8(x.as_ptr().add(i + 16 * k)));
-                let wv = vld1q_s8(w.as_ptr().add(i + 16 * k));
-                // sdot: four i8 products summed into each i32 lane (ARMv8.2 dot product); otherwise widening
-                // multiplies pairwise-added into i32.
-                #[cfg(target_feature = "dotprod")]
-                {
-                    *sk = vdotq_s32(*sk, xv, wv);
-                }
-                #[cfg(not(target_feature = "dotprod"))]
-                {
-                    *sk = vpadalq_s16(*sk, vmull_s8(vget_low_s8(xv), vget_low_s8(wv)));
-                    *sk = vpadalq_s16(*sk, vmull_high_s8(xv, wv));
+                for offset in [0, 16] {
+                    let xv = vreinterpretq_s8_u8(vld1q_u8(x.as_ptr().add(i + 32 * k + offset)));
+                    let wv = vld1q_s8(w.as_ptr().add(i + 32 * k + offset));
+                    // sdot: four i8 products summed into each i32 lane (ARMv8.2 dot product); otherwise widening
+                    // multiplies pairwise-added into i32.
+                    #[cfg(target_feature = "dotprod")]
+                    {
+                        *sk = vdotq_s32(*sk, xv, wv);
+                    }
+                    #[cfg(not(target_feature = "dotprod"))]
+                    {
+                        *sk = vpadalq_s16(*sk, vmull_s8(vget_low_s8(xv), vget_low_s8(wv)));
+                        *sk = vpadalq_s16(*sk, vmull_high_s8(xv, wv));
+                    }
                 }
             }
-            i += 64;
+            i += 128;
         }
         vaddvq_s32(vaddq_s32(vaddq_s32(s[0], s[1]), vaddq_s32(s[2], s[3])))
     }
@@ -324,7 +335,16 @@ fn dot_u8_i8(x: &[u8; HIDDEN], w: &[i8]) -> i32 {
 #[cfg(not(any(target_feature = "avx2", target_arch = "aarch64")))]
 #[inline(always)]
 fn dot_u8_i8(x: &[u8; HIDDEN], w: &[i8]) -> i32 {
-    x.iter().zip(w).map(|(&a, &b)| a as i32 * b as i32).sum()
+    let mut sums = [0i32; 4];
+    for i in (0..HIDDEN).step_by(128) {
+        for (k, sum) in sums.iter_mut().enumerate() {
+            for j in 0..32 {
+                let index = i + 32 * k + j;
+                *sum += x[index] as i32 * w[index] as i32;
+            }
+        }
+    }
+    (sums[0] + sums[1]) + (sums[2] + sums[3])
 }
 
 /// Evaluation in centipawns from the side to move's point of view.
@@ -369,6 +389,29 @@ pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
 mod tests {
     use super::*;
     use crate::attacks;
+
+    #[test]
+    fn integer_dot_matches_scalar_oracle() {
+        #[repr(align(32))]
+        struct Inputs([u8; HIDDEN]);
+        let mut x = Inputs([0; HIDDEN]);
+        let mut w = [0i8; HIDDEN];
+        let mut seed = 0x9351_1234_8765_abceu64;
+        for trial in 0..1024 {
+            for i in 0..HIDDEN {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                x.0[i] = if trial < 4 { 127 } else { (seed & 127) as u8 };
+                w[i] = match trial {
+                    0 => -128, 1 => 127, 2 => if i % 2 == 0 { -128 } else { 127 },
+                    _ => (seed >> 32) as i8,
+                };
+            }
+            let expected: i32 = x.0.iter().zip(&w).map(|(&a, &b)| a as i32 * b as i32).sum();
+            assert_eq!(dot_u8_i8(&x.0, &w), expected, "trial {trial}");
+        }
+    }
 
     /// Incremental updates must exactly match a from-scratch refresh after every kind of move.
     #[test]
