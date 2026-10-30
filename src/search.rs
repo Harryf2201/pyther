@@ -1535,7 +1535,7 @@ impl Searcher {
             }
             if best >= beta {
                 // Sprint 13: damp the stand-pat cutoff towards beta, and remember it (with its eval) in the TT.
-                if p(P::SprQsBlend) > 0 && best.abs() < MATE_BOUND {
+                if p(P::SprQsBlend) > 0 && best.abs() < MATE_BOUND && beta.abs() < MATE_BOUND {
                     best = (best + beta) / 2;
                 }
                 if p(P::SprQsStore) > 0 && tt_entry.is_none() {
