@@ -344,6 +344,7 @@ fn dot_u8_i8(x: &[u8; HIDDEN], w: &[i8]) -> i32 {
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
+#[allow(dead_code)] // Single-row oracle in dotprod tests; widening fallback otherwise.
 fn dot_u8_i8(x: &[u8; HIDDEN], w: &[i8]) -> i32 {
     use std::arch::aarch64::*;
     // The inputs are 0..=127, so they are also valid i8. Four independent sums so the multiply-accumulates
@@ -536,7 +537,39 @@ fn inputs(acc: &AccPair, stm: usize) -> Inputs {
 fn dense_l1(x: &[u8; HIDDEN], bucket: usize) -> [i32; L1] {
     crate::profile_hit!(6);
     let q = unsafe { L1Q.unwrap_unchecked() };
-    std::array::from_fn(|o| dot_u8_i8(x, &q.w[(bucket * L1 + o) * HIDDEN..(bucket * L1 + o + 1) * HIDDEN]))
+    #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+    { dense_l1_dotprod(x, &q.w[bucket * L1 * HIDDEN..(bucket + 1) * L1 * HIDDEN]) }
+    #[cfg(not(all(target_arch = "aarch64", target_feature = "dotprod")))]
+    { std::array::from_fn(|o| dot_u8_i8(x, &q.w[(bucket * L1 + o) * HIDDEN..(bucket * L1 + o + 1) * HIDDEN])) }
+}
+
+/// Four output rows share each input load. Eight independent sums cover SDOT latency.
+/// Keep the kernel out of its callers so LLVM cannot hoist a whole input row into
+/// registers and spill it while unrolling the output loop. Only integer sums move.
+#[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+#[inline(never)]
+fn dense_l1_dotprod(x: &[u8; HIDDEN], rows: &[i8]) -> [i32; L1] {
+    use std::arch::aarch64::*;
+    assert_eq!(rows.len(), L1 * HIDDEN);
+    let mut out = [0i32; L1];
+    unsafe {
+        for group in 0..L1 / 4 {
+            let mut sums = [vdupq_n_s32(0); 8];
+            for i in (0..HIDDEN).step_by(32) {
+                let a = vreinterpretq_s8_u8(vld1q_u8(x.as_ptr().add(i)));
+                let b = vreinterpretq_s8_u8(vld1q_u8(x.as_ptr().add(i + 16)));
+                for lane in 0..4 {
+                    let w = rows.as_ptr().add((group * 4 + lane) * HIDDEN + i);
+                    sums[2 * lane] = vdotq_s32(sums[2 * lane], a, vld1q_s8(w));
+                    sums[2 * lane + 1] = vdotq_s32(sums[2 * lane + 1], b, vld1q_s8(w.add(16)));
+                }
+            }
+            for lane in 0..4 {
+                out[group * 4 + lane] = vaddvq_s32(vaddq_s32(sums[2 * lane], sums[2 * lane + 1]));
+            }
+        }
+    }
+    out
 }
 
 /// Evaluation in centipawns from the side to move's point of view.
@@ -639,6 +672,25 @@ pub(crate) mod profiling {
 mod tests {
     use super::*;
     use crate::attacks;
+
+    #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
+    #[test]
+    fn shared_input_dot_matches_scalar() {
+        let mut x = Inputs([0; HIDDEN]);
+        let mut rows = vec![0i8; L1 * HIDDEN];
+        let mut seed = 0xa712_fabb_5323_9921u64;
+        let mut rand = || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+        for trial in 0..128 {
+            for v in &mut x.0 { *v = if trial < 3 { 127 } else { (rand() & 127) as u8 }; }
+            for v in &mut rows { *v = match trial { 0 => -128, 1 => 127, _ => rand() as i8 }; }
+            let actual = dense_l1_dotprod(&x.0, &rows);
+            for o in 0..L1 {
+                let row = &rows[o * HIDDEN..(o + 1) * HIDDEN];
+                let expected: i32 = x.0.iter().zip(row).map(|(&a, &b)| a as i32 * b as i32).sum();
+                assert_eq!(actual[o], expected, "trial {trial}, output {o}");
+            }
+        }
+    }
 
     #[test]
     fn pairwise_matches_scalar_rounding() {
