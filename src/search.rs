@@ -1207,7 +1207,7 @@ impl Searcher {
 
             // Singular extension: if the TT move is much better than every alternative, extend it.
             let mut ext = 0;
-            if !root && depth >= 8 && mv == tt_move && excluded.is_null() {
+            if !root && depth >= p(P::SprSeDepth) && mv == tt_move && excluded.is_null() {
                 let e = tt_entry.unwrap();
                 let tt_score = score_from_tt(e.score, ply);
                 if e.depth >= depth - 3 && e.bound != BOUND_UPPER && tt_score.abs() < MATE_BOUND {
