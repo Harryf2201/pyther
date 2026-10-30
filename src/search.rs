@@ -1510,6 +1510,7 @@ impl Searcher {
         let keys = self.corr_keys(b, ply);
         let mut raw_eval = NO_EVAL;
         let mut best;
+        let mut stand = NO_EVAL;
         if in_check {
             best = -INF;
         } else {
@@ -1517,8 +1518,29 @@ impl Searcher {
                 Some(e) if e.eval > -MATE_BOUND => e.eval,
                 _ => self.raw_eval(b, ply),
             };
-            best = self.corrected(b, raw_eval, &keys);
+            stand = self.corrected(b, raw_eval, &keys);
+            best = stand;
+            // Sprint 13: a TT score is a better stand-pat estimate than the static eval when its bound allows it.
+            if p(P::SprQsTtEval) > 0 {
+                if let Some(e) = tt_entry {
+                    let s = score_from_tt(e.score, ply);
+                    if s.abs() < MATE_BOUND
+                        && (e.bound == BOUND_EXACT
+                            || (e.bound == BOUND_LOWER && s > best)
+                            || (e.bound == BOUND_UPPER && s < best))
+                    {
+                        best = s;
+                    }
+                }
+            }
             if best >= beta {
+                // Sprint 13: damp the stand-pat cutoff towards beta, and remember it (with its eval) in the TT.
+                if p(P::SprQsBlend) > 0 && best.abs() < MATE_BOUND {
+                    best = (best + beta) / 2;
+                }
+                if p(P::SprQsStore) > 0 && tt_entry.is_none() {
+                    self.tt.store(b.hash, Move::NULL, score_to_tt(best, ply), raw_eval, 0, BOUND_LOWER, false);
+                }
                 return best;
             }
             alpha = alpha.max(best);
@@ -1534,7 +1556,8 @@ impl Searcher {
 
         let mut best_move = Move::NULL;
         let mut legal = 0;
-        let futility = if in_check { NO_EVAL } else { best + p(P::QsFutility) };
+        // Futility stays based on the static stand-pat value (equal to best unless SprQsTtEval moved it).
+        let futility = if in_check { NO_EVAL } else { stand + p(P::QsFutility) };
         for i in 0..list.len {
             let mv = Self::pick(&mut list, &mut scores, i, Some(&mut see), None);
             if !b.is_legal(mv) {

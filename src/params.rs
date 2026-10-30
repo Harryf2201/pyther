@@ -82,6 +82,11 @@ params! {
     SprLmrDepthPrune = 0, 0, 1;
     SprCountermove = 0, 0, 1;
     SprPvHist = 0, 0, 200;
+    // Search sprint 13 (Oct 30): each 0 = off.
+    SprTtBucket = 0, 0, 1;
+    SprQsTtEval = 0, 0, 1;
+    SprQsBlend = 0, 0, 1;
+    SprQsStore = 0, 0, 1;
     // Search sprint 4: each 0 = off.
     SprHindsight = 1, 0, 1;
     SprCaptFut = 0, 0, 400;
