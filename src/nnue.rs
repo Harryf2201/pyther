@@ -183,16 +183,6 @@ pub fn refresh(b: &Board, acc: &mut AccPair) {
             let pc = b.mailbox[sq];
             if pc != NO_PIECE {
                 let w = &net.feature_weights[feature(persp, pc as usize, sq)].vals;
-                #[cfg(target_arch = "aarch64")]
-                unsafe {
-                    use std::arch::aarch64::*;
-                    for i in (0..HIDDEN).step_by(8) {
-                        let v = vld1q_s16(a.vals.as_ptr().add(i));
-                        let d = vld1q_s16(w.as_ptr().add(i));
-                        vst1q_s16(a.vals.as_mut_ptr().add(i), vaddq_s16(v, d));
-                    }
-                }
-                #[cfg(not(target_arch = "aarch64"))]
                 for (v, d) in a.vals.iter_mut().zip(w) {
                     *v += *d;
                 }
@@ -242,13 +232,6 @@ pub fn update(b: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
         let src = &parent[persp].vals;
         let dst = &mut child[persp].vals;
         // Fused copy + update, specialised so each case is one vectorised pass.
-        #[cfg(target_arch = "aarch64")]
-        match (na, ns) {
-            (1, 1) => update_neon::<1, 1>(src, dst, add, sub),
-            (1, 2) => update_neon::<1, 2>(src, dst, add, sub),
-            _ => update_neon::<2, 2>(src, dst, add, sub),
-        }
-        #[cfg(not(target_arch = "aarch64"))]
         match (na, ns) {
             (1, 1) => {
                 for i in 0..HIDDEN {
@@ -265,25 +248,6 @@ pub fn update(b: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
                     dst[i] = src[i] + add[0][i] + add[1][i] - sub[0][i] - sub[1][i];
                 }
             }
-        }
-    }
-}
-
-/// Explicit vectors avoid depending on the compiler's N1 loop-vectorization cost model.
-/// NEON's wrapping i16 add/sub matches release Rust arithmetic, including intermediate wrap.
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn update_neon<const ADDS: usize, const SUBS: usize>(
-    src: &[i16; HIDDEN], dst: &mut [i16; HIDDEN],
-    add: [&[i16; HIDDEN]; 2], sub: [&[i16; HIDDEN]; 2],
-) {
-    use std::arch::aarch64::*;
-    unsafe {
-        for i in (0..HIDDEN).step_by(8) {
-            let mut v = vld1q_s16(src.as_ptr().add(i));
-            for w in &add[..ADDS] { v = vaddq_s16(v, vld1q_s16(w.as_ptr().add(i))); }
-            for w in &sub[..SUBS] { v = vsubq_s16(v, vld1q_s16(w.as_ptr().add(i))); }
-            vst1q_s16(dst.as_mut_ptr().add(i), v);
         }
     }
 }
@@ -708,23 +672,6 @@ pub(crate) mod profiling {
 mod tests {
     use super::*;
     use crate::attacks;
-
-    #[cfg(target_arch = "aarch64")]
-    #[test]
-    fn neon_accumulator_wraps_exactly() {
-        let src: [i16; HIDDEN] = std::array::from_fn(|i| (i.wrapping_mul(11119)) as i16);
-        let a: [i16; HIDDEN] = std::array::from_fn(|i| (i.wrapping_mul(31271) + 32767) as i16);
-        let b: [i16; HIDDEN] = std::array::from_fn(|i| (i.wrapping_mul(529) + 32768) as i16);
-        let c: [i16; HIDDEN] = std::array::from_fn(|i| (i.wrapping_mul(7177) + 65535) as i16);
-        let d: [i16; HIDDEN] = std::array::from_fn(|i| (i.wrapping_mul(19) + 15) as i16);
-        let mut dst = [0; HIDDEN];
-        update_neon::<1, 1>(&src, &mut dst, [&a, &b], [&c, &d]);
-        for i in 0..HIDDEN { assert_eq!(dst[i], src[i].wrapping_add(a[i]).wrapping_sub(c[i])); }
-        update_neon::<1, 2>(&src, &mut dst, [&a, &b], [&c, &d]);
-        for i in 0..HIDDEN { assert_eq!(dst[i], src[i].wrapping_add(a[i]).wrapping_sub(c[i]).wrapping_sub(d[i])); }
-        update_neon::<2, 2>(&src, &mut dst, [&a, &b], [&c, &d]);
-        for i in 0..HIDDEN { assert_eq!(dst[i], src[i].wrapping_add(a[i]).wrapping_add(b[i]).wrapping_sub(c[i]).wrapping_sub(d[i])); }
-    }
 
     #[cfg(all(target_arch = "aarch64", target_feature = "dotprod"))]
     #[test]
