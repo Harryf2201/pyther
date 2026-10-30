@@ -376,3 +376,20 @@ throttling opt-out: native median wall +5.20% [-1.64%, +7.82%], CPU +6.47%
 [-4.10%, +11.08%]. Each round 9,393,267 identical nodes. Busy-PC sample, no Elo
 claim, ARM untested. No deployment/version bump or remote operation. Design,
 commands, raw-data locations and exact ARM checklist: validation/report.md.
+
+### Oct 30: v26rc default-off correctness controls
+
+Branch v26rc from frozen c73a3fe; implementation fffd930. FixMate50 gives actual
+checkmate precedence at the 50-move boundary. FixTbPly normalizes the reserved
+TB band just like mates, preserving the preference for reaching TB results sooner.
+FixR50Tt downgrades TT mate/TB claims whose encoded distance exceeds remaining
+rule-50 plies. All independent/default-off; eval clamps reserve the TB band when
+either TT option is on. TT keys and frozen.options unchanged; no version bump.
+Normal/frozen: all 40 requested per-position d15/d17 comparisons match c73a3fe;
+15 normal and 12 frozen release tests pass, plus the real-table reproduction.
+Findings 7/8 fixed at Threads 1/4. Six paired d20 rounds per thread count show
+no resolved NPS cost: T1 paired median -0.72% [-3.89%,+2.99%], T4 +2.04%
+[-3.27%,+6.94%]. Busy-PC observations, no Elo/ARM claim. WDL distance is not DTZ:
+a direct cached WDL result can still be wrong across halfmove clocks (deferred
+finding 2); root DTZ is unchanged. Design, commands, limits and raw-data locations:
+validation/rc-report.md. No remote operations or deployment.
