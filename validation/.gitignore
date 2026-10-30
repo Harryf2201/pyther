@@ -3,3 +3,5 @@
 !*.py
 !report.md
 !rc-report.md
+!armspeed-report.md
+!armspeed-arm.sh

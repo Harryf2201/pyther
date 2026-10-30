@@ -58,6 +58,7 @@ pub fn run(args: &[String]) {
         std::env::consts::ARCH, cfg!(target_feature="dotprod"), cfg!(target_feature="avx2"),
         cfg!(target_feature="avxvnni"), cfg!(feature="frozen"), cfg!(feature="profile-counters"));
     let boards: Vec<_> = BENCH_FENS.iter().map(|fen| Board::from_fen(fen).unwrap()).collect();
+    time("harness.selection", n, |i| black_box(&boards[i % boards.len()]));
     let mut moves: Vec<_> = boards.iter().flat_map(|b| b.legal_moves().into_iter().map(move |mv| (*b, mv))).collect();
     let ep = Board::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1").unwrap();
     moves.push((ep, ep.parse_move("e5d6").unwrap()));
@@ -71,6 +72,7 @@ pub fn run(args: &[String]) {
     costs[14] = time(NAMES[14], n, |i| tt.probe(black_box(moves[i % moves.len()].0.hash)));
     let store = time("tt.store", n, |i| { let (b, mv) = &moves[i % moves.len()]; tt.store(black_box(b.hash), *mv, 12, 5, 8, BOUND_EXACT, false) });
     println!("note make_move includes Board copy; legal movegen includes allocation/filtering; SEE threshold=0; TT is warm/hit-dominated");
+    println!("note l2+l3 includes L1 dequantization/bias; micro corpus is warm and differs from search cache/branch distributions");
     let mut s = Box::new(Searcher::new(tt.clone(), Arc::new(AtomicBool::new(false))));
     s.print = false;
     let mut nodes = 0;

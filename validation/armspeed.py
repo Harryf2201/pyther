@@ -18,7 +18,8 @@ import run
 
 ROOT = run.ROOT
 OUT = ROOT / 'validation'
-CONTROL = ROOT.parent / 'testing/health/control.txt'
+run.LAB = Path(os.environ.get('PAWNSTORM_LAB', ROOT.parent / 'testing')).resolve()
+CONTROL = run.LAB / 'health/control.txt'
 CHILDREN = []
 LOCK = threading.Lock()
 
@@ -76,20 +77,31 @@ def watchdog():
                 else: suspended.discard(p.pid)
         time.sleep(.1)
 
-def monitored(cmd, log, env=None, cwd=ROOT, build=False):
+def monitored(cmd, log, env=None, cwd=ROOT, build=False, allow_missing_linker=False):
     health()
     kwargs = dict(creationflags=0x4000 | 0x08000000) if os.name == 'nt' else dict(start_new_session=True)
     with (OUT/log).open('w') as f:
         p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT, **kwargs)
+        if not build and os.name == 'nt':
+            k = ctypes.windll.kernel32
+            assert k.SetProcessAffinityMask(ctypes.c_void_p(int(p._handle)), 1 << int(os.environ.get('BENCH_CPU','0')))
+            class Throttle(ctypes.Structure):
+                _fields_=[('Version',ctypes.c_ulong),('ControlMask',ctypes.c_ulong),('StateMask',ctypes.c_ulong)]
+            t=Throttle(1,1,0)
+            assert k.SetProcessInformation(ctypes.c_void_p(int(p._handle)),4,ctypes.byref(t),ctypes.sizeof(t))
+        elif not build:
+            os.sched_setaffinity(p.pid, {int(os.environ.get('BENCH_CPU','0'))})
         p._build = build
         register(p).wait()
-    if p.returncode: raise RuntimeError(f'command failed: validation/{log}')
+    if p.returncode and not (allow_missing_linker and 'linker `cc` not found' in (OUT/log).read_text()):
+        raise RuntimeError(f'command failed: validation/{log}')
+    return p.returncode
 
 def binary(label):
     return OUT / ('as-'+label+('.exe' if os.name=='nt' else '.engine'))
 
 def build(a):
-    source = ROOT
+    source = Path(a.source).resolve() if a.source else ROOT
     if a.ref:
         source = OUT / ('as-source-'+a.label)
         source.mkdir(exist_ok=False)
@@ -103,22 +115,33 @@ def build(a):
     target = OUT / ('as-target-'+a.label)
     common = ['--release','--offline','-j','4','--manifest-path',str(source/'Cargo.toml'),'--target-dir',str(target)]
     if a.features: common += ['--features',a.features]
-    if a.asm:
-        monitored(['cargo','rustc','--lib']+common+['--target','aarch64-unknown-linux-gnu','--','--emit=asm'], 'as-'+a.label+'-asm.log', env, source, True)
+    if a.asm or a.final_asm:
+        crate = ['--bin','pawnstorm'] if a.final_asm else ['--lib']
+        link_status = monitored(['cargo','rustc']+crate+common+['--target','aarch64-unknown-linux-gnu','--','--emit=asm'],
+            'as-'+a.label+'-asm.log', env, source, True, allow_missing_linker=a.final_asm)
+        assert list((target/'aarch64-unknown-linux-gnu/release/deps').glob('pawnstorm-*.s')), 'assembly missing'
+        if link_status: print('final assembly emitted; no ARM linker installed',flush=True)
+        if a.test:
+            monitored(['cargo','check','--tests']+common+['--target','aarch64-unknown-linux-gnu'], 'as-'+a.label+'-check.log', env, source, True)
     else:
         for action in ['build'] + (['test'] if a.test else []):
             monitored(['cargo',action]+common, 'as-'+a.label+'-'+action+'.log', env, source, True)
         shutil.copy2(target/'release'/('pawnstorm.exe' if os.name=='nt' else 'pawnstorm'), binary(a.label))
-    meta = dict(ref=a.ref or subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
+    meta = dict(ref=a.ref or subprocess.check_output(['git','rev-parse','HEAD'],cwd=source,text=True).strip(),
                 flags=flags,features=a.features,net_sha256=hashlib.sha256((run.LAB/'engines/x25-big7.nnue').read_bytes()).hexdigest(),
                 frozen_options_sha256=hashlib.sha256((source/'frozen.options').read_bytes()).hexdigest())
-    if not a.asm: meta['exe_sha256'] = hashlib.sha256(binary(a.label).read_bytes()).hexdigest()
+    if not (a.asm or a.final_asm): meta['exe_sha256'] = hashlib.sha256(binary(a.label).read_bytes()).hexdigest()
+    else: meta['assembly_mode'] = 'final-fat-lto' if a.final_asm else 'intermediate-library'
+    meta['rustc'] = subprocess.check_output(['rustc','--version'],text=True).strip()
+    meta['source_sha256'] = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (source/'src').glob('*.rs')}
     (OUT/('as-'+a.label+'-build.json')).write_text(json.dumps(meta,indent=2))
     print('built',a.label,flush=True)
 
 def compare(a):
-    for label in [a.reference,a.label]:
-        monitored([str(binary(label)),'bench'], 'as-'+label+'-bench.log')
+    exes = [Path(a.reference_exe).resolve() if a.reference_exe else binary(a.reference),
+            Path(a.exe).resolve() if a.exe else binary(a.label)]
+    for label, exe in zip([a.reference,a.label], exes):
+        monitored([str(exe),'bench'], 'as-'+label+'-bench.log')
     import re
     totals = [int(re.search(r'(\d+) nodes', (OUT/('as-'+l+'-bench.log')).read_text())[1]) for l in [a.reference,a.label]]
     assert totals[0] == totals[1], totals
@@ -133,22 +156,33 @@ def compare(a):
                                  stderr=subprocess.DEVNULL, text=True, start_new_session=True, preexec_fn=setup)
         return register(p)
     run.launch = launch
-    sys.argv = ['interleave.py',str(OUT/('as-'+a.label+'-'+a.action+'.json')),str(binary(a.reference)),str(binary(a.label)),
+    sys.argv = ['interleave.py',str(OUT/('as-'+a.label+'-'+a.action+'.json')),*map(str,exes),
                 '--depth',str(a.depth),'--count','12','--pairs',str(a.pairs)]
     interleave.main()
 
 def main():
     if os.name == 'nt': assert ctypes.windll.kernel32.SetPriorityClass(ctypes.c_void_p(-1),0x4000)
-    else: os.nice(10)
+    else:
+        os.nice(10)
+        if os.environ.get('ARMSPEED_BUILD_AFFINITY') == '1':
+            os.sched_setaffinity(0, {int(os.environ.get('BENCH_CPU','0'))})
     threading.Thread(target=watchdog,daemon=True).start()
+    options = {}
+    for line in (run.LAB/'engines/x25-big7.options').read_text().splitlines():
+        if line.strip() and not line.lstrip().startswith('#'):
+            k,v = line.split('=',1); options[k.strip()] = v.strip()
+    assert options == run.OPTIONS, 'this harness requires frozen.options to match x25-big7.options'
     p=argparse.ArgumentParser(); sub=p.add_subparsers(dest='action',required=True)
-    b=sub.add_parser('build'); b.add_argument('label'); b.add_argument('--ref'); b.add_argument('--features',default=''); b.add_argument('--arch',choices=['native','avx2','scalar','arm','arm-neon'],default='native'); b.add_argument('--test',action='store_true'); b.add_argument('--asm',action='store_true')
+    b=sub.add_parser('build'); b.add_argument('label'); src=b.add_mutually_exclusive_group(); src.add_argument('--ref'); src.add_argument('--source'); b.add_argument('--features',default=''); b.add_argument('--arch',choices=['native','avx2','scalar','arm','arm-neon'],default='native'); b.add_argument('--test',action='store_true'); asm=b.add_mutually_exclusive_group(); asm.add_argument('--asm',action='store_true'); asm.add_argument('--final-asm',action='store_true')
     for cmd in ['check','speed']:
         q=sub.add_parser(cmd); q.add_argument('label'); q.add_argument('reference'); q.add_argument('--depth',type=int,default=15 if cmd=='check' else 20); q.add_argument('--pairs',type=int,default=1 if cmd=='check' else 6)
+        q.add_argument('--exe'); q.add_argument('--reference-exe')
     q=sub.add_parser('profile'); q.add_argument('label'); q.add_argument('--iterations',type=int,default=20000); q.add_argument('--depth',type=int,default=15)
+    q=sub.add_parser('command'); q.add_argument('label'); q.add_argument('cmd',nargs=argparse.REMAINDER)
     a=p.parse_args()
     if a.action=='build': build(a)
     elif a.action in ['check','speed']: compare(a)
+    elif a.action=='command': monitored(a.cmd, 'as-'+a.label+'-command.log', build=True)
     else:
         monitored([str(binary(a.label)),'profile',str(a.iterations),str(a.depth),str(run.LAB/'engines/x25-big7.nnue'),str(run.LAB/'engines/x25-big7.options')], 'as-'+a.label+'-profile.log')
         print('profile saved',a.label,flush=True)
