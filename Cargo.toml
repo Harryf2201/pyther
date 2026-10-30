@@ -4,7 +4,7 @@ version = "2.1.0"
 edition = "2021"
 
 [features]
-default = []
+default = ["kb4nm"]
 # Unmirrored KB4 input zones; requires the matching 1024-wide merged network.
 kb4nm = []
 # Diagnostic build: same KB inference/search, rebuild changed king zones from scratch.
