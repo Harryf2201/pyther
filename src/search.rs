@@ -1428,6 +1428,12 @@ impl Searcher {
         }
 
         if excluded.is_null() {
+            // Cutoffs already learn above; reward exact quiet alpha-raisers once here.
+            if p(P::SprPvHist) > 0 && !best_move.is_null() && best_move.is_quiet() && best < beta {
+                let bonus = ((p(P::HistBonusMul) * depth - 50).min(p(P::HistBonusMax))
+                    * p(P::SprPvHist) / 100).clamp(0, HIST_MAX);
+                self.update_quiet(b, best_move, &rows, bonus, threats, ply);
+            }
             if p(P::SprPriorBonus) > 0 && best_move.is_null() && !in_check && ply > 0 {
                 if let Some(q) = self.stack[ply - 1].prior_quiet {
                     let bonus = ((p(P::HistBonusMul) * depth - 50).min(p(P::HistBonusMax))

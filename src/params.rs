@@ -81,6 +81,7 @@ params! {
     SprExtLimit = 0, 0, 2;
     SprLmrDepthPrune = 0, 0, 1;
     SprCountermove = 0, 0, 1;
+    SprPvHist = 0, 0, 200;
     // Search sprint 4: each 0 = off.
     SprHindsight = 1, 0, 1;
     SprCaptFut = 0, 0, 400;
