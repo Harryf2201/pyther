@@ -35,3 +35,6 @@ SprCorrLmr=64
 SprHindsight=1
 SprMatScale=400
 SprOptimism=100
+FixMate50=1
+FixTbPly=1
+FixR50Tt=1
