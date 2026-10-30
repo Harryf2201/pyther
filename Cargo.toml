@@ -5,6 +5,7 @@ edition = "2021"
 
 [features]
 frozen = []
+profile-counters = []
 
 [dependencies]
 shakmaty = "0.30.2"

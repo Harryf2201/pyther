@@ -129,6 +129,7 @@ impl TT {
     }
 
     pub fn probe(&self, key: u64) -> Option<TTData> {
+        crate::profile_hit!(14);
         if self.bucketed() {
             let c = self.cluster(key);
             return self.entries[c..c + 4].iter().find_map(|e| Self::read(e, key));
@@ -137,6 +138,7 @@ impl TT {
     }
 
     pub fn store(&self, key: u64, mut mv: Move, score: i32, eval: i32, depth: i32, bound: u8, pv: bool) {
+        crate::profile_hit!(15);
         let age = self.age.load(Relaxed);
         if self.bucketed() {
             // The position's own entry keeps the single-entry update rule; a new position replaces an

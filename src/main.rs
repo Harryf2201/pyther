@@ -14,6 +14,8 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        // profile [iterations] [search-depth] [EvalFile] [options-file]
+        Some("profile") => pawnstorm::profile::run(&args[2..]),
         // datagen <threads> <positions> <soft-nodes> <output-dir> [max-seconds] [seed]
         //         [--openings <file> [--opening-percent 50] --deny <test-book start FENs>]
         Some("datagen") => {

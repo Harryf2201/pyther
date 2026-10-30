@@ -334,6 +334,7 @@ impl Board {
 
     /// Plays a legal move (check with `is_legal` first).
     pub fn make_move(&mut self, mv: Move) {
+        crate::profile_hit!(10);
         let (from, to, flag) = (mv.from(), mv.to(), mv.flag());
         let us = self.stm;
         let them = us ^ 1;
@@ -409,6 +410,7 @@ impl Board {
 
     /// Generates pseudo-legal moves. `noisy_only` = captures and queen promotions (for quiescence).
     pub fn gen_moves(&self, list: &mut MoveList, noisy_only: bool) {
+        crate::profile_hit!(11);
         let us = self.stm;
         let them = us ^ 1;
         let ours = self.colors[us];
@@ -553,6 +555,7 @@ impl Board {
     /// Static exchange evaluation: does `mv` win at least `threshold` material
     /// once all captures on the target square are played out?
     pub fn see(&self, mv: Move, threshold: i32) -> bool {
+        crate::profile_hit!(13);
         if mv.is_castle() || mv.is_ep() || mv.is_promo() {
             return threshold <= 0;
         }
@@ -660,6 +663,7 @@ impl Board {
     }
 
     pub fn legal_moves(&self) -> Vec<Move> {
+        crate::profile_hit!(12);
         let mut list = MoveList::new();
         self.gen_moves(&mut list, false);
         list.iter().filter(|&m| self.is_legal(m)).collect()

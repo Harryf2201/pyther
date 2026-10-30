@@ -162,6 +162,7 @@ fn feature(persp: usize, pc: usize, sq: usize) -> usize {
 pub type AccPair = [Accumulator; 2];
 
 pub fn refresh(b: &Board, acc: &mut AccPair) {
+    crate::profile_hit!(0);
     let net = net();
     for (persp, a) in acc.iter_mut().enumerate() {
         *a = net.feature_bias;
@@ -179,6 +180,7 @@ pub fn refresh(b: &Board, acc: &mut AccPair) {
 
 /// Computes the child's accumulators from the parent's for `mv` played in position `b`.
 pub fn update(b: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
+    crate::profile_hit!(if mv.is_promo() { 4 } else if mv.is_castle() { 3 } else if mv.is_capture() { 2 } else { 1 });
     let (from, to) = (mv.from(), mv.to());
     let us = b.stm;
     let moved = b.mailbox[from] as usize;
@@ -241,6 +243,7 @@ pub fn update(b: &Board, mv: Move, parent: &AccPair, child: &mut AccPair) {
 #[cfg(target_feature = "avx2")]
 #[inline(always)]
 fn pairwise_inputs(v: &[i16; HIDDEN], out: &mut [u8]) {
+    crate::profile_hit!(5);
     use std::arch::x86_64::*;
     const HALF: usize = HIDDEN / 2;
     unsafe {
@@ -263,6 +266,7 @@ fn pairwise_inputs(v: &[i16; HIDDEN], out: &mut [u8]) {
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
 fn pairwise_inputs(v: &[i16; HIDDEN], out: &mut [u8]) {
+    crate::profile_hit!(5);
     use std::arch::aarch64::*;
     const HALF: usize = HIDDEN / 2;
     unsafe {
@@ -282,6 +286,7 @@ fn pairwise_inputs(v: &[i16; HIDDEN], out: &mut [u8]) {
 #[cfg(not(any(target_feature = "avx2", target_arch = "aarch64")))]
 #[inline(always)]
 fn pairwise_inputs(v: &[i16; HIDDEN], out: &mut [u8]) {
+    crate::profile_hit!(5);
     const HALF: usize = HIDDEN / 2;
     for i in 0..HALF {
         let a = v[i].clamp(0, QA as i16) as u32;
@@ -393,6 +398,7 @@ const NONZERO8: [Nonzero8; 256] = {
 /// Pair sums fit i16; complete sums fit i32. Only integer addition is reordered.
 #[cfg(target_feature = "avx2")]
 fn sparse_l1(x: &[u8; HIDDEN], weights: &[L1Block]) -> [i32; L1] {
+    crate::profile_hit!(7);
     use std::arch::x86_64::*;
     debug_assert_eq!(weights.len(), HIDDEN / 4);
     unsafe {
@@ -431,6 +437,7 @@ fn sparse_l1(x: &[u8; HIDDEN], weights: &[L1Block]) -> [i32; L1] {
 
 #[cfg(target_arch = "aarch64")]
 fn sparse_l1(x: &[u8; HIDDEN], weights: &[L1Block]) -> [i32; L1] {
+    crate::profile_hit!(7);
 use std::arch::aarch64::*;
 debug_assert_eq!(weights.len(), HIDDEN / 4);
 unsafe {
@@ -473,6 +480,7 @@ unsafe {
 
 #[cfg(not(any(target_feature = "avx2", target_arch = "aarch64")))]
 fn sparse_l1(x: &[u8; HIDDEN], weights: &[L1Block]) -> [i32; L1] {
+    crate::profile_hit!(7);
 let mut sums = [0i32; L1];
 let mut blocks = [0u16; HIDDEN / 4 + 8];
 let mut count = 0;
@@ -494,29 +502,56 @@ for &block in &blocks[..count] {
     sums
 }
 
-/// Evaluation in centipawns from the side to move's point of view.
-/// `pieces` = number of pieces on the board (both colors, kings included), which picks the bucket.
-pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
-    let net = net();
-    // Same rule as bullet's MaterialCount<N>: (pieces - 2) / ceil(32 / N).
-    let bucket = ((pieces.saturating_sub(2)) as usize / 32usize.div_ceil(OUTPUT_BUCKETS)).min(OUTPUT_BUCKETS - 1);
+#[repr(align(32))]
+struct Inputs([u8; HIDDEN]);
+
+#[inline(always)]
+fn inputs(acc: &AccPair, stm: usize) -> Inputs {
     const HALF: usize = HIDDEN / 2;
     // Layer 1 in 8-bit integers: each side's clipped first-layer outputs, the first half times the second
     // half (side to move first), scaled to 0..=127, dotted with the i8 weights of this bucket's 16 outputs.
-    #[repr(align(32))]
-    struct Inputs([u8; HIDDEN]);
     let mut x = Inputs([0; HIDDEN]);
     for (side, base) in [(stm, 0), (stm ^ 1, HALF)] {
         pairwise_inputs(&acc[side].vals, &mut x.0[base..base + HALF]);
     }
+    x
+}
+
+#[inline(always)]
+fn dense_l1(x: &[u8; HIDDEN], bucket: usize) -> [i32; L1] {
+    crate::profile_hit!(6);
+    let q = unsafe { L1Q.unwrap_unchecked() };
+    std::array::from_fn(|o| dot_u8_i8(x, &q.w[(bucket * L1 + o) * HIDDEN..(bucket * L1 + o + 1) * HIDDEN]))
+}
+
+/// Evaluation in centipawns from the side to move's point of view.
+/// `pieces` = number of pieces on the board (both colors, kings included), which picks the bucket.
+pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
+    crate::profile_hit!(9);
+    // Same rule as bullet's MaterialCount<N>: (pieces - 2) / ceil(32 / N).
+    let bucket = ((pieces.saturating_sub(2)) as usize / 32usize.div_ceil(OUTPUT_BUCKETS)).min(OUTPUT_BUCKETS - 1);
+    let x = inputs(acc, stm);
     let q = unsafe { L1Q.unwrap_unchecked() };
     // VNNI and ARM dotprod keep the dense path (sparse measured ~1% slower on the Neoverse N1 bot server);
     // AVX2, other NEON and scalar use the sparse blocks. Both give identical integers.
     let dots: [i32; L1] = if cfg!(any(target_feature = "avxvnni", all(target_arch = "aarch64", target_feature = "dotprod"))) {
-        std::array::from_fn(|o| dot_u8_i8(&x.0, &q.w[(bucket * L1 + o) * HIDDEN..(bucket * L1 + o + 1) * HIDDEN]))
+        dense_l1(&x.0, bucket)
     } else {
         sparse_l1(&x.0, &q.blocks[bucket * (HIDDEN / 4)..(bucket + 1) * (HIDDEN / 4)])
     };
+    tail(dots, bucket)
+}
+
+#[inline(always)]
+fn tail(dots: [i32; L1], bucket: usize) -> i32 {
+    crate::profile_hit!(8);
+    (tail_value(dots, bucket) * SCALE) as i32
+}
+
+#[inline(always)]
+fn tail_value(dots: [i32; L1], bucket: usize) -> f32 {
+    let net = net();
+    let q = unsafe { L1Q.unwrap_unchecked() };
     let mut h1 = net.l1b[bucket];
     for (o, h) in h1.iter_mut().enumerate() {
         *h += dots[o] as f32 * q.mul[bucket * L1 + o];
@@ -535,13 +570,104 @@ pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
         let x = h.clamp(0.0, 1.0);
         out += net.l3w[k][bucket] * x * x;
     }
-    (out * SCALE) as i32
+    out
+}
+
+pub(crate) mod profiling {
+    use super::*;
+    use crate::profile::{time, NAMES};
+    use std::hint::black_box;
+
+    pub fn measure(n: usize, boards: &[Board], moves: &[(Board, Move)]) -> [f64; 15] {
+        let mut costs = [0.0; 15];
+        let zero = [Accumulator { vals: [0; HIDDEN] }; 2];
+        // Include children to exercise buckets, both side orders, and realistic activation sparsity.
+        let mut corpus = boards.to_vec();
+        for &(mut b, mv) in moves { b.make_move(mv); corpus.push(b); }
+        let accs: Vec<_> = corpus.iter().map(|b| { let mut acc = zero; refresh(b, &mut acc); acc }).collect();
+        let xs: Vec<_> = corpus.iter().zip(&accs).map(|(b, acc)| inputs(acc, b.stm)).collect();
+        let buckets: Vec<_> = corpus.iter().map(|b| ((b.occ().count_ones().saturating_sub(2) / 4) as usize).min(7)).collect();
+        let q = unsafe { L1Q.unwrap_unchecked() };
+        let dots: Vec<_> = xs.iter().zip(&buckets).map(|(x, &b)| dense_l1(&x.0, b)).collect();
+        // Fail immediately on an integer kernel mismatch; print a portable eval checksum.
+        let mut digest = 0xcbf29ce484222325u64;
+        for i in 0..corpus.len() {
+            let b = buckets[i];
+            assert_eq!(dots[i], sparse_l1(&xs[i].0, &q.blocks[b * (HIDDEN / 4)..(b + 1) * (HIDDEN / 4)]));
+            let v = evaluate(&accs[i], corpus[i].stm, corpus[i].occ().count_ones());
+            digest = (digest ^ v as u32 as u64).wrapping_mul(0x100000001b3);
+            digest = (digest ^ tail_value(dots[i], b).to_bits() as u64).wrapping_mul(0x100000001b3);
+        }
+        println!("corpus positions={} eval_digest={digest:016x} dense_sparse=equal", corpus.len());
+        let mut dst = zero;
+        costs[0] = time(NAMES[0], n, |i| { refresh(black_box(&corpus[i % corpus.len()]), black_box(&mut dst)); black_box(&dst); });
+        for kind in 1..=4 {
+            let selected: Vec<_> = moves.iter().filter(|(_, mv)| {
+                (if mv.is_promo() { 4 } else if mv.is_castle() { 3 } else if mv.is_capture() { 2 } else { 1 }) == kind
+            }).map(|&(b, mv)| { let mut acc = zero; refresh(&b, &mut acc); (b, mv, acc) }).collect();
+            assert!(!selected.is_empty(), "missing update fixture {kind}");
+            println!("fixtures {}={}", NAMES[kind], selected.len());
+            costs[kind] = time(NAMES[kind], n, |i| { let (b, mv, acc) = black_box(&selected[i % selected.len()]); update(b, *mv, acc, black_box(&mut dst)); black_box(&dst); });
+        }
+        let mut pair = [0u8; HIDDEN / 2];
+        costs[5] = time(NAMES[5], n, |i| { pairwise_inputs(black_box(&accs[i % accs.len()][i % 2].vals), black_box(&mut pair)); black_box(&pair); });
+        costs[6] = time(NAMES[6], n, |i| dense_l1(black_box(&xs[i % xs.len()].0), black_box(buckets[i % buckets.len()])));
+        costs[7] = time(NAMES[7], n, |i| { let b = buckets[i % buckets.len()]; sparse_l1(black_box(&xs[i % xs.len()].0), black_box(&q.blocks[b * (HIDDEN / 4)..(b + 1) * (HIDDEN / 4)])) });
+        costs[8] = time(NAMES[8], n, |i| tail(black_box(dots[i % dots.len()]), black_box(buckets[i % buckets.len()])));
+        costs[9] = time(NAMES[9], n, |i| { let j = i % accs.len(); evaluate(black_box(&accs[j]), black_box(corpus[j].stm), black_box(corpus[j].occ().count_ones())) });
+        costs
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::attacks;
+
+    #[test]
+    fn pairwise_matches_scalar_rounding() {
+        let mut v = Accumulator { vals: [0; HIDDEN] };
+        let mut out = [0; HIDDEN / 2];
+        for trial in 0..256 {
+            for i in 0..HIDDEN { v.vals[i] = ((i * 109 + trial * 251) & 65535) as i16; }
+            pairwise_inputs(&v.vals, &mut out);
+            for i in 0..HIDDEN / 2 {
+                let a = v.vals[i].clamp(0, 255) as i32;
+                let b = v.vals[i + HIDDEN / 2].clamp(0, 255) as i32;
+                assert_eq!(out[i], ((a * b + 256) >> 9) as u8);
+            }
+        }
+    }
+
+    // Keep the original serialized-layout arithmetic as a bitwise f32 oracle.
+    #[test]
+    fn tail_preserves_float_bits() {
+        let mut seed = 0x9321_bfab_fdae_2381u64;
+        let mut rand = || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+        let mut bytes = vec![0u8; NET_BYTES];
+        let float_start = (768 * HIDDEN + HIDDEN) * 2;
+        for chunk in bytes[float_start..].chunks_exact_mut(4) {
+            let v = ((rand() % 20001) as f32 - 10000.0) * 0.00001;
+            chunk.copy_from_slice(&v.to_le_bytes());
+        }
+        set_net(from_bytes(&bytes).unwrap());
+        let net = net();
+        let q = unsafe { L1Q.unwrap_unchecked() };
+        for trial in 0..512 {
+            let bucket = trial % OUTPUT_BUCKETS;
+            let dots: [i32; L1] = std::array::from_fn(|_| (rand() % 2_000_001) as i32 - 1_000_000);
+            let mut h1 = net.l1b[bucket];
+            for (o, h) in h1.iter_mut().enumerate() { *h += dots[o] as f32 * q.mul[bucket * L1 + o]; }
+            let mut h2 = net.l2b[bucket];
+            for (j, &h) in h1.iter().enumerate() {
+                let x = h.clamp(0.0, 1.0); let x = x * x;
+                for o in 0..L2 { h2[o] += net.l2w[j][bucket][o] * x; }
+            }
+            let mut expected = net.l3b[bucket];
+            for (k, &h) in h2.iter().enumerate() { let x = h.clamp(0.0, 1.0); expected += net.l3w[k][bucket] * x * x; }
+            assert_eq!(tail_value(dots, bucket).to_bits(), expected.to_bits(), "trial {trial}");
+        }
+    }
 
     #[test]
     fn sparse_blocks_match_dense_dots() {
