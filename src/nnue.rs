@@ -510,8 +510,9 @@ pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
         pairwise_inputs(&acc[side].vals, &mut x.0[base..base + HALF]);
     }
     let q = unsafe { L1Q.unwrap_unchecked() };
-    // VNNI retains its dense fast path. AVX2, NEON and scalar use the same sparse blocks.
-    let dots: [i32; L1] = if cfg!(target_feature = "avxvnni") {
+    // VNNI and ARM dotprod keep the dense path (sparse measured ~1% slower on the Neoverse N1 bot server);
+    // AVX2, other NEON and scalar use the sparse blocks. Both give identical integers.
+    let dots: [i32; L1] = if cfg!(any(target_feature = "avxvnni", all(target_arch = "aarch64", target_feature = "dotprod"))) {
         std::array::from_fn(|o| dot_u8_i8(&x.0, &q.w[(bucket * L1 + o) * HIDDEN..(bucket * L1 + o + 1) * HIDDEN]))
     } else {
         sparse_l1(&x.0, &q.blocks[bucket * (HIDDEN / 4)..(bucket + 1) * (HIDDEN / 4)])
