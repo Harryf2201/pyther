@@ -522,15 +522,13 @@ for &block in &blocks[..count] {
 struct Inputs([u8; HIDDEN]);
 
 #[inline(always)]
-fn inputs(acc: &AccPair, stm: usize) -> Inputs {
+fn inputs(acc: &AccPair, stm: usize, x: &mut Inputs) {
     const HALF: usize = HIDDEN / 2;
     // Layer 1 in 8-bit integers: each side's clipped first-layer outputs, the first half times the second
     // half (side to move first), scaled to 0..=127, dotted with the i8 weights of this bucket's 16 outputs.
-    let mut x = Inputs([0; HIDDEN]);
     for (side, base) in [(stm, 0), (stm ^ 1, HALF)] {
         pairwise_inputs(&acc[side].vals, &mut x.0[base..base + HALF]);
     }
-    x
 }
 
 #[inline(always)]
@@ -578,7 +576,8 @@ pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
     crate::profile_hit!(9);
     // Same rule as bullet's MaterialCount<N>: (pieces - 2) / ceil(32 / N).
     let bucket = ((pieces.saturating_sub(2)) as usize / 32usize.div_ceil(OUTPUT_BUCKETS)).min(OUTPUT_BUCKETS - 1);
-    let x = inputs(acc, stm);
+    let mut x = Inputs([0; HIDDEN]);
+    inputs(acc, stm, &mut x);
     let q = unsafe { L1Q.unwrap_unchecked() };
     // VNNI and ARM dotprod keep the dense path (sparse measured ~1% slower on the Neoverse N1 bot server);
     // AVX2, other NEON and scalar use the sparse blocks. Both give identical integers.
@@ -634,7 +633,9 @@ pub(crate) mod profiling {
         let mut corpus = boards.to_vec();
         for &(mut b, mv) in moves { b.make_move(mv); corpus.push(b); }
         let accs: Vec<_> = corpus.iter().map(|b| { let mut acc = zero; refresh(b, &mut acc); acc }).collect();
-        let xs: Vec<_> = corpus.iter().zip(&accs).map(|(b, acc)| inputs(acc, b.stm)).collect();
+        let xs: Vec<_> = corpus.iter().zip(&accs).map(|(b, acc)| {
+            let mut x = Inputs([0; HIDDEN]); inputs(acc, b.stm, &mut x); x
+        }).collect();
         let buckets: Vec<_> = corpus.iter().map(|b| ((b.occ().count_ones().saturating_sub(2) / 4) as usize).min(7)).collect();
         let q = unsafe { L1Q.unwrap_unchecked() };
         let dots: Vec<_> = xs.iter().zip(&buckets).map(|(x, &b)| dense_l1(&x.0, b)).collect();
