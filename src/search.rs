@@ -242,6 +242,7 @@ pub struct Searcher {
     pub helper_nodes: Vec<Arc<AtomicU64>>,
     /// Sprint 3: null-move pruning is off below this ply while a null-move verification search runs.
     nmp_min_ply: usize,
+    root_depth: i32,
     /// Set while pondering (thinking on the opponent's time): the clock is ignored until "ponderhit"
     /// clears it, and the time budget then counts from that moment.
     pub ponder: Arc<AtomicBool>,
@@ -386,6 +387,7 @@ impl Searcher {
             shared_nodes: Arc::new(AtomicU64::new(0)),
             helper_nodes: Vec::new(),
             nmp_min_ply: 0,
+            root_depth: 0,
             optimism: [0; 2],
             draw_score: [0; 2],
             overhead_ms: 10,
@@ -803,6 +805,7 @@ impl Searcher {
         let next_pct = p(P::SprTmNextPct);
         let mut previous_iteration = 0.0;
         for depth in 1..=max_depth {
+            self.root_depth = depth;
             let iteration_start = Instant::now();
             // Previous completed root score, frozen across aspiration re-searches.
             let optimism = p(P::SprOptimism) * score / (score.abs() + 100);
@@ -1234,7 +1237,8 @@ impl Searcher {
                         return 0;
                     }
                     if s < s_beta {
-                        ext = if !pv_node && s < s_beta - p(P::SeDouble) { 2 } else { 1 };
+                        ext = if !pv_node && s < s_beta - p(P::SeDouble)
+                            && (p(P::SprExtLimit) == 0 || (ply as i32) < 2 * self.root_depth) { 2 } else { 1 };
                     } else if s_beta >= beta {
                         return s_beta; // multi-cut
                     } else if tt_score >= beta {
@@ -1250,7 +1254,9 @@ impl Searcher {
             nb.make_move(mv);
             self.tt.prefetch(nb.hash);
             self.nnue_update(b, mv, ply);
-            if ext == 0 && nb.in_check() {
+            if ext == 0 && nb.in_check()
+                && (p(P::SprExtLimit) < 2 || (ply as i32) < 2 * self.root_depth)
+            {
                 ext = 1;
             }
             self.stack[ply].cont = b.mailbox[mv.from()] as usize * 64 + mv.to();
