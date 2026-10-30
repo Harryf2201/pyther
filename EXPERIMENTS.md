@@ -181,3 +181,21 @@ contention (and, found Oct 29, by Windows confining hidden below-normal processe
 | 1536-wide big7 net (480 sb) vs v2.6-dev | -11.4 +/- 5.7 (3600 g, 8+0.08) | Dropped: too slow at this size; possible teacher for distillation later | x26d-w1536, branch w1536-train |
 | Gen8 data generation with the big7 net (all sources from Oct 29 ~10:30): GitHub, Oracle, PC (king-attack seeds) | ~420M positions by Oct 30 06:00 | Running; first gen8 net (gen8a: big7 data + 255M gen8) training Oct 30 | branch gen8-datagen, testing\coord\GEN8.md |
 | PC datagen throughput: Windows 11 EcoQoS had confined hidden below-normal datagen to the 8 E-cores | Opting out of power throttling (SetProcessInformation) more than doubled local datagen | Fixed in datagen-adapt.ps1 and the watchdog | gen8-datagen tools |
+
+## Oct 30: unbalanced measurement book (prepared locally)
+
+`pyther-unbal-v1.epd` is a measurement-only derivative of the existing `8moves_v3.pgn`.
+Positions are selected with pawnstorm-xsearch5, x26d-p25.nnue and x25-big7.options,
+Threads 1 / Hash 16, using 30,000-node searches and 0-4 locally evaluated extension plies.
+The band is 70-130 cp in absolute White eval; either color may be better and either side
+may move. No other engine supplies evaluations or extension choices. The book and its
+provenance must not enter training data. Generator and paired-sensitivity calculator:
+`tools/build-unbalanced-book.py`, `tools/book-board.rs`, `tools/book-sensitivity.py`.
+
+The local `unbal-book` branch adds an optional PGN/EPD testkit book input. The lab copy
+`testing/coord/cloud-queue-book.ps1` accepts an optional tenth queue field; the running
+queue script is unchanged. No upload, push, commit or cloud match is part of preparation.
+Counts, hashes, generation/validation commands and the deployment/Claude validation plan
+are in `testing/books/pyther-unbal-v1-report.md` (lab sibling of this repo).
+Sensitivity remains unmeasured until paired cloud tests run. Keep release comparisons on
+`8moves_v3.pgn`; compare books using normalized paired Elo and LLR per game.

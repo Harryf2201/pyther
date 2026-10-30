@@ -23,6 +23,10 @@ on:
       label:
         description: "Run label (shown in the run name)"
         default: ""
+      book:
+        description: "Opening-book asset in testkit (.pgn or .epd)"
+        required: false
+        default: "8moves_v3.pgn"
 
 run-name: "test-match ${{ inputs.label }} (${{ inputs.dev }} vs ${{ inputs.base }})"
 
@@ -47,6 +51,8 @@ jobs:
   play:
     needs: plan
     runs-on: ubuntu-latest
+    env:
+      BOOK: ${{ inputs.book || '8moves_v3.pgn' }}
     timeout-minutes: 350
     strategy:
       fail-fast: false
@@ -61,8 +67,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          [[ "$BOOK" =~ ^[A-Za-z0-9._-]{1,60}\.(pgn|epd)$ ]] || { echo 'Invalid book asset name'; exit 1; }
           mkdir kit
-          gh release download testkit --dir kit --pattern '8moves_v3.pgn' \
+          gh release download testkit --dir kit --pattern "$BOOK" \
             --pattern '${{ inputs.dev }}.*' --pattern '${{ inputs.base }}.*'
           ls -l kit
 
@@ -93,7 +100,7 @@ jobs:
           done
           seed=$(( ${{ github.run_id }} % 100000 * 31 + ${{ matrix.shard }} * 7919 ))
           ./fc "${args[@]}" -each "tc=${{ inputs.tc }}" option.Hash=16 option.Threads=1 \
-            -openings file=kit/8moves_v3.pgn format=pgn order=random -srand "$seed" \
+            -openings "file=kit/$BOOK" "format=${BOOK##*.}" order=random -srand "$seed" \
             -rounds ${{ inputs.rounds }} -games 2 -repeat -concurrency "$(nproc)" -recover \
             -pgnout file=games.pgn > out.txt 2>&1 || true
           tail -20 out.txt

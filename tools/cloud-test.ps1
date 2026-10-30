@@ -13,7 +13,9 @@ param(
     [int]$Jobs = 6,
     [string]$Notes = '',
     # Reattach to a run that is already queued or running (e.g. after this script was killed): skips upload and start.
-    [long]$RunId = 0
+    [long]$RunId = 0,
+    [ValidatePattern('(?-i)^[A-Za-z0-9._-]{1,60}\.(pgn|epd)\z')]
+    [string]$Book = '8moves_v3.pgn'
 )
 . "$PSScriptRoot\paths.ps1"
 $ErrorActionPreference = 'Stop'
@@ -35,7 +37,9 @@ foreach ($s in @(@($Dev, $DevRef), @($Base, $BaseRef))) {
 
 # 2. Start the run and find its id.
 $before = (Get-Date).ToUniversalTime()
-gh workflow run test-match.yml -f dev=$Dev -f base=$Base -f tc=$TC -f rounds=$Rounds -f jobs=$Jobs -f label=$Name | Out-Null
+$bookArgs = @()
+if ($PSBoundParameters.ContainsKey('Book')) { $bookArgs = @('-f', "book=$Book") }
+gh workflow run test-match.yml -f dev=$Dev -f base=$Base -f tc=$TC -f rounds=$Rounds -f jobs=$Jobs -f label=$Name @bookArgs | Out-Null
 for ($i = 0; $i -lt 30 -and -not $id; $i++) {
     Start-Sleep 10
     $runs = gh run list --workflow test-match.yml -L 5 --json databaseId,createdAt,displayTitle | ConvertFrom-Json
@@ -83,6 +87,6 @@ $games = $w + $d + $l
     "Ptnml(0-2): [$($p -join ', ')]",
     'Finished match'
 ) | Set-Content "$runDir\output.txt" -Encoding ascii
-@("name=$Name", 'type=gauntlet', "tc=$TC", "total=$games", "main=$Dev", "created=$([DateTimeOffset]::Now.ToUnixTimeSeconds())", "concurrency=cloud", "notes=$Notes (GitHub Actions run $id)") |
+@("name=$Name", 'type=gauntlet', "tc=$TC", "total=$games", "main=$Dev", "created=$([DateTimeOffset]::Now.ToUnixTimeSeconds())", "concurrency=cloud", "book=$Book", "notes=$Notes (GitHub Actions run $id)") |
     Set-Content "$runDir\meta.txt" -Encoding ascii
 Get-Content "$runDir\output.txt"
