@@ -393,3 +393,27 @@ no resolved NPS cost: T1 paired median -0.72% [-3.89%,+2.99%], T4 +2.04%
 a direct cached WDL result can still be wrong across halfmove clocks (deferred
 finding 2); root DTZ is unchanged. Design, commands, limits and raw-data locations:
 validation/rc-report.md. No remote operations or deployment.
+
+### Oct 30: armspeed measurement kit and three retained exact ARM candidates
+
+Local armspeed from v26rc 4f58f61. Portable `profile` command separates refresh,
+four update types, pairwise, dense/sparse L1, float tail, evaluate, board/movegen,
+SEE and TT costs; opt-in thread-local counters estimate inclusive search shares.
+Separate commits: 15e9bc1 runtime bucket-local float rows, 768fa45 wider NEON
+pairwise stores, 893844f four-output shared-input SDOT. Float arithmetic order is
+preserved. Explicit-NEON accumulator trial 7047bc7 was reverted by 6496d2c:
+final fat-LTO output already vectorizes the baseline, unlike intermediate library
+assembly. Kit repair c900ff0 fills activations in place, removing a 1 KB copy
+introduced by extraction; it is not credited as a gain over the original source.
+Native normal/frozen parity passes all retained candidates; final AVX2-only and
+generic x86-64 normal/frozen checks and serial release tests pass. Same x25-big7
+options/net: 1,190,866 d15 nodes, 9,393,267 d20 nodes; float-bit corpus digest
+7f34c575ad382200. Tail vs kit: six x86 pairs, +3.31% paired median NPS
+[-0.19%,+6.21%], CPU +2.43%; busy-PC observation, not an ARM/Elo claim.
+Final repaired kit plus candidates vs v26rc: six x86 pairs, -0.55% paired median
+wall NPS [-3.55%,+5.13%], CPU +1.05%; no resolved overall x86 gain.
+ARM final fat-LTO binary assembly, dotprod/widening/frozen+counter library assembly
+and test compilation checked (binary assembly emitted before missing-linker error);
+ARM execution/parity/speed remain pending. No remote operations or deployment.
+Detailed measurements, limits, reproduction and isolated server commands:
+validation/armspeed-report.md. Local evidence: ignored validation/as-*.

@@ -19,6 +19,12 @@ cargo build --release
 ./target/release/pawnstorm perft    # move generation correctness test
 ```
 
+For component timings, run `pawnstorm profile [iterations] [depth] [EvalFile]
+[options-file]`. Add `--features profile-counters` to estimate component shares
+from calls during a fixed-depth search; keep that feature off for speed A/Bs.
+The exact ARM candidates, parity evidence and server command list are in
+[validation/armspeed-report.md](validation/armspeed-report.md).
+
 For a build with fixed search parameters, use
 `cargo build --release --offline -j 4 --features frozen`. `frozen.options` contains `Name=value` overrides; parameters
 omitted from that file keep their defaults in `src/param_defs.rs`. The build
