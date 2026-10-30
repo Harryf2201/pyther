@@ -1093,7 +1093,7 @@ impl Searcher {
                 self.tt.prefetch(nb.hash);
                 self.acc[ply + 1] = self.acc[ply];
                 self.stack[ply].cont = NO_CONT;
-                self.stack[ply].prior_quiet = None;
+                if p(P::SprPriorBonus) > 0 { self.stack[ply].prior_quiet = None; }
                 self.hashes.push(nb.hash);
                 let s = -self.negamax(&nb, depth - r, -beta, -beta + 1, ply + 1, !cut_node);
                 self.hashes.pop();
@@ -1142,7 +1142,7 @@ impl Searcher {
                     self.tt.prefetch(nb.hash);
                     self.nnue_update(b, mv, ply);
                     self.stack[ply].cont = b.mailbox[mv.from()] as usize * 64 + mv.to();
-                    self.stack[ply].prior_quiet = None;
+                    if p(P::SprPriorBonus) > 0 { self.stack[ply].prior_quiet = None; }
                     self.hashes.push(nb.hash);
                     let mut s = -self.qsearch(&nb, -pc_beta, -pc_beta + 1, ply + 1);
                     if s >= pc_beta {
@@ -1172,16 +1172,26 @@ impl Searcher {
         // Sprint: with a TT move in the list, search it first and score the other moves only if it does not cut
         // off (most cut-nodes then skip scoring altogether).
         let mut scored = false;
-        let mut search_scores = [0i32; 256];
+        // Ordering-only adjustments (SprLowPly / SprCountermove) keep a copy of the unadjusted scores for
+        // pruning and LMR; it exists only when one of them is on, so the default path has no extra 1 KB to clear.
+        let mut search_scores: Option<[i32; 256]> = None;
         let ordering_only = p(P::SprLowPly) > 0 || p(P::SprCountermove) > 0;
         let tt_at = if p(P::SprLazyScore) > 0 && !tt_move.is_null() { list.moves[..list.len].iter().position(|&m| m == tt_move) } else { None };
         if let Some(k) = tt_at {
             list.moves.swap(0, k);
             scores[0] = 10_000_000;
-            search_scores[0] = 10_000_000;
+            if ordering_only {
+                let mut base = [0i32; 256];
+                base[0] = 10_000_000;
+                search_scores = Some(base);
+            }
         } else {
             self.score_moves(b, &list, &mut scores, tt_move, ply, threats, &rows, None);
-            if ordering_only { self.snapshot_search_scores(&list, &scores, &mut search_scores, tt_move, ply, p(P::SprLowPly) > 0, p(P::SprCountermove) > 0); }
+            if ordering_only {
+                let mut base = [0i32; 256];
+                self.snapshot_search_scores(&list, &scores, &mut base, tt_move, ply, p(P::SprLowPly) > 0, p(P::SprCountermove) > 0);
+                search_scores = Some(base);
+            }
             scored = true;
         }
 
@@ -1197,16 +1207,17 @@ impl Searcher {
         for i in 0..list.len {
             if i == 1 && !scored {
                 self.score_moves(b, &list, &mut scores, tt_move, ply, threats, &rows, None);
-                if ordering_only { self.snapshot_search_scores(&list, &scores, &mut search_scores, tt_move, ply, p(P::SprLowPly) > 0, p(P::SprCountermove) > 0); }
+                if let Some(base) = search_scores.as_mut() {
+                    self.snapshot_search_scores(&list, &scores, base, tt_move, ply, p(P::SprLowPly) > 0, p(P::SprCountermove) > 0);
+                }
                 scored = true;
             }
-            let mv = Self::pick(&mut list, &mut scores, i, None,
-                if ordering_only { Some(&mut search_scores) } else { None });
+            let mv = Self::pick(&mut list, &mut scores, i, None, search_scores.as_mut());
             if mv == excluded || !b.is_legal(mv) {
                 continue;
             }
             let is_quiet = mv.is_quiet();
-            if ordering_only { scores[i] = search_scores[i]; }
+            if let Some(base) = &search_scores { scores[i] = base[i]; }
             if is_quiet && skip_quiets {
                 continue;
             }
@@ -1294,10 +1305,13 @@ impl Searcher {
                 ext = 1;
             }
             self.stack[ply].cont = b.mailbox[mv.from()] as usize * 64 + mv.to();
-            // Save the move's own parent context, never the child's pawn/threat keys.
-            self.stack[ply].prior_quiet = if p(P::SprPriorBonus) > 0 && is_quiet {
-                Some(PriorQuiet { mv, idx: self.stack[ply].cont, side: b.stm, rows, threats })
-            } else { None };
+            // Save the move's own parent context, never the child's pawn/threat keys. Only written (and only read)
+            // while SprPriorBonus is on, so the default path does not pay for the copy.
+            if p(P::SprPriorBonus) > 0 {
+                self.stack[ply].prior_quiet = if is_quiet {
+                    Some(PriorQuiet { mv, idx: self.stack[ply].cont, side: b.stm, rows, threats })
+                } else { None };
+            }
             self.hashes.push(nb.hash);
             legal += 1;
             let mut new_depth = depth - 1 + ext;
