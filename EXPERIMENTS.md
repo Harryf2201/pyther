@@ -293,3 +293,43 @@ matching searches there. No ARM speed/Elo claim. PC gain would suggest about
 3-4 Elo under the round's rough heuristic; no matches were run.
 Full report, binaries, scripts, JSON samples, profiling sources, and logs:
 `../testing/speed2/` and `../testing/coord/codex-speed2-report-2026-10-30.md`.
+## Oct 30 follow-up: AVX2-only and block-transposed sparse integer L1
+
+Deployment context: cloud runners are Zen 3 (AVX2/BMI2, no AVX-VNNI); bot is
+Neoverse N1 (NEON/dotprod). All speed measurements here are still on the PC,
+with `-C target-cpu=native -C target-feature=-avxvnni`, not actual Zen 3 hardware.
+The a4ed84f AVX2 four-accumulator loop vs 94f4385: six alternating depth-20
+pairs, +1.53% ratio of median NPS; paired +1.53% [-1.80%,+5.62%]. CPU median
++2.14%. Retain the loop; no evidence of regression requiring the old AVX2 loop.
+
+Measured 7,262,081 actual evaluations using x25-big7 plus all options, 12 FENs,
+depth 20: 47.633% of four-byte input groups nonzero (122/256 median;
+p10=111, p90=133). Historical sparse code located at 1bdfd71 branches on
+individual products and uses bucket-interleaved f32 rows. This trial instead
+repacks the already-quantised weights at load time into aligned 64-byte rows,
+[bucket][four-input block][output][four weights]. The serialized network and
+quantisation are unchanged. AVX2 movemask + 256-entry lookup compacts nonzero
+indices, then one broadcast and two maddubs/madd vector pairs update all 16
+outputs. NEON dotprod/widening and scalar use the same block layout/index order.
+VNNI builds retain the dense fast path. Extra packed weights cost 128 KiB/net.
+
+First packed implementation used many short data-dependent loops: -20.41%
+median NPS (six pairs), dropped. One compacted-index loop gave marginal gains;
+64-byte block alignment improved it substantially. Retained aligned version:
+six position-interleaved A/B pairs, +5.49% median NPS (+5.49% paired median,
+range -0.58%..+6.19%); independent six whole-suite A/B pairs confirmed:
+baseline 1,369,255 NPS [1,335,409..1,401,980], candidate 1,477,285
+[1,379,334..1,492,416], +7.89% ratio of medians. Paired median +6.54%,
+range +2.64%..+8.44%, all six positive; CPU paired +6.52% [3.69%..11.15%].
+These per-change numbers are relative to a4ed84f AVX2-only.
+
+Method: CPU 0 P-core, BelowNormal, execution throttling disabled, Threads=1,
+Hash=16, fresh TT/history per position, no builds during timings. All 12 FENs,
+depth 20, x25-big7.nnue plus every .options line. Native VNNI, AVX2-only and
+scalar builds all pass 9 release tests, all 12 reference node/score/best/ponder
+comparisons, and bench 9,393,267 nodes. New sparse oracle test covers every
+8-bit group mask and random/extreme inputs/weights. No new UCI options or
+version bump. NNUE arithmetic/float order unchanged; no board changes.
+Claude must compile/test/time the new NEON sparse mask/index/dotprod loop and
+its widening fallback on ARM. No measured N1 or EPYC gain claimed.
+Raw sources, scripts, logs and JSON: ../testing/speed2/r2-*.

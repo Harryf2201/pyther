@@ -15,6 +15,7 @@ pub const HIDDEN: usize = 1024;
 pub const OUTPUT_BUCKETS: usize = 8;
 const L1: usize = 16;
 const L2: usize = 32;
+const _: () = assert!(HIDDEN % 128 == 0 && L1 == 16);
 const SCALE: f32 = 400.0;
 const QA: i32 = 255;
 
@@ -44,10 +45,16 @@ pub struct Network {
 static DEFAULT_NET: &[u8] = include_bytes!("../nets/default.bin");
 static mut NET: Option<&'static Network> = None;
 
-/// Layer 1 quantised to i8 for speed (built from the f32 weights when a network loads), one row of HIDDEN
-/// weights per (bucket, output). `mul` turns the integer dot product back into the float pre-activation.
+/// Sixteen outputs by four inputs, aligned so both AVX2 loads stay in one cache line.
+#[derive(Clone, Copy)]
+#[repr(C, align(64))]
+struct L1Block([i8; 64]);
+
+/// Quantised L1 with dense VNNI rows and sparse input-major blocks.
 struct L1Quant {
     w: Vec<i8>,
+    /// [bucket][four-input block][output][four weights]. Runtime-only repacking.
+    blocks: Vec<L1Block>,
     /// Per (bucket, output) row.
     mul: Vec<f32>,
 }
@@ -68,10 +75,26 @@ fn set_net(net: &'static Network) {
             mul[b * L1 + o] = 512.0 / (65025.0 * scale);
         }
     }
+    let blocks = pack_l1(&w);
     unsafe {
-        L1Q = Some(Box::leak(Box::new(L1Quant { w, mul })));
+        L1Q = Some(Box::leak(Box::new(L1Quant { w, blocks, mul })));
         NET = Some(net);
     }
+}
+
+fn pack_l1(w: &[i8]) -> Vec<L1Block> {
+    let mut blocks = vec![L1Block([0; 64]); w.len() / 64];
+    for b in 0..OUTPUT_BUCKETS {
+        for block in 0..HIDDEN / 4 {
+            for o in 0..L1 {
+                for j in 0..4 {
+                    blocks[b * (HIDDEN / 4) + block].0[o * 4 + j] =
+                        w[(b * L1 + o) * HIDDEN + block * 4 + j];
+                }
+            }
+        }
+    }
+    blocks
 }
 
 fn from_bytes(bytes: &[u8]) -> Result<&'static Network, String> {
@@ -347,6 +370,130 @@ fn dot_u8_i8(x: &[u8; HIDDEN], w: &[i8]) -> i32 {
     (sums[0] + sums[1]) + (sums[2] + sums[3])
 }
 
+struct Nonzero8 { len: u8, offsets: [u16; 8] }
+const NONZERO8: [Nonzero8; 256] = {
+    let mut table = [const { Nonzero8 { len: 0, offsets: [0; 8] } }; 256];
+    let mut mask = 0;
+    while mask < 256 {
+        let mut bit = 0;
+        while bit < 8 {
+            if mask & (1 << bit) != 0 {
+                let n = table[mask].len as usize;
+                table[mask].offsets[n] = bit as u16;
+                table[mask].len += 1;
+            }
+            bit += 1;
+        }
+        mask += 1;
+    }
+    table
+};
+
+/// Each surviving group broadcasts four inputs into 16 output dot products.
+/// Pair sums fit i16; complete sums fit i32. Only integer addition is reordered.
+#[cfg(target_feature = "avx2")]
+fn sparse_l1(x: &[u8; HIDDEN], weights: &[L1Block]) -> [i32; L1] {
+    use std::arch::x86_64::*;
+    debug_assert_eq!(weights.len(), HIDDEN / 4);
+    unsafe {
+        let mut lo = _mm256_setzero_si256();
+        let mut hi = _mm256_setzero_si256();
+        let ones = _mm256_set1_epi16(1);
+        let mut blocks = [0u16; HIDDEN / 4 + 8];
+        let mut count = 0;
+        for base in (0..HIDDEN / 4).step_by(8) {
+            let input = _mm256_loadu_si256(x.as_ptr().add(base * 4) as *const __m256i);
+            // Every byte <=127, hence each nonzero four-byte word is positive.
+            let mask = _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpgt_epi32(input, _mm256_setzero_si256()))) as usize;
+            let indices = &NONZERO8[mask];
+            let offsets = _mm_loadu_si128(indices.offsets.as_ptr() as *const __m128i);
+            _mm_storeu_si128(blocks.as_mut_ptr().add(count) as *mut __m128i,
+                _mm_add_epi16(offsets, _mm_set1_epi16(base as i16)));
+            count += indices.len as usize;
+        }
+        // One long loop avoids an unpredictable short loop for each eight-group mask.
+        for &block in &blocks[..count] {
+        let block = block as usize;
+        let word = std::ptr::read_unaligned(x.as_ptr().add(block * 4) as *const i32);
+        let broadcast = _mm256_set1_epi32(word);
+        let w = weights.as_ptr().add(block) as *const i8;
+        let wl = _mm256_load_si256(w as *const __m256i);
+        let wh = _mm256_load_si256(w.add(32) as *const __m256i);
+        lo = _mm256_add_epi32(lo, _mm256_madd_epi16(_mm256_maddubs_epi16(broadcast, wl), ones));
+        hi = _mm256_add_epi32(hi, _mm256_madd_epi16(_mm256_maddubs_epi16(broadcast, wh), ones));
+    }
+    let mut out = [0i32; L1];
+    _mm256_storeu_si256(out.as_mut_ptr() as *mut __m256i, lo);
+    _mm256_storeu_si256(out.as_mut_ptr().add(8) as *mut __m256i, hi);
+    out
+}
+}
+
+#[cfg(target_arch = "aarch64")]
+fn sparse_l1(x: &[u8; HIDDEN], weights: &[L1Block]) -> [i32; L1] {
+use std::arch::aarch64::*;
+debug_assert_eq!(weights.len(), HIDDEN / 4);
+unsafe {
+    let mut sums = [vdupq_n_s32(0); 4];
+    let bits = [1u32, 2, 4, 8];
+    let mut blocks = [0u16; HIDDEN / 4 + 8];
+    let mut count = 0;
+    for base in (0..HIDDEN / 4).step_by(8) {
+        let a = vld1q_u32(x.as_ptr().add(base * 4) as *const u32);
+        let b = vld1q_u32(x.as_ptr().add(base * 4 + 16) as *const u32);
+        let a = vandq_u32(vcgtq_u32(a, vdupq_n_u32(0)), vld1q_u32(bits.as_ptr()));
+        let b = vandq_u32(vcgtq_u32(b, vdupq_n_u32(0)), vld1q_u32(bits.as_ptr()));
+        let mask = (vaddvq_u32(a) | (vaddvq_u32(b) << 4)) as usize;
+        let indices = &NONZERO8[mask];
+        let offsets = vld1q_u16(indices.offsets.as_ptr());
+        vst1q_u16(blocks.as_mut_ptr().add(count), vaddq_u16(offsets, vdupq_n_u16(base as u16)));
+        count += indices.len as usize;
+    }
+    for &block in &blocks[..count] {
+        let block = block as usize;
+        let word = std::ptr::read_unaligned(x.as_ptr().add(block * 4) as *const i32);
+        let broadcast = vreinterpretq_s8_s32(vdupq_n_s32(word));
+        for (k, sum) in sums.iter_mut().enumerate() {
+            let w = vld1q_s8((weights.as_ptr().add(block) as *const i8).add(k * 16));
+            #[cfg(target_feature = "dotprod")]
+            { *sum = vdotq_s32(*sum, broadcast, w); }
+            #[cfg(not(target_feature = "dotprod"))]
+            {
+                let lo = vpaddlq_s16(vmull_s8(vget_low_s8(broadcast), vget_low_s8(w)));
+                let hi = vpaddlq_s16(vmull_high_s8(broadcast, w));
+                *sum = vaddq_s32(*sum, vpaddq_s32(lo, hi));
+            }
+        }
+    }
+    let mut out = [0i32; L1];
+    for (k, sum) in sums.iter().enumerate() { vst1q_s32(out.as_mut_ptr().add(k * 4), *sum); }
+    out
+}
+}
+
+#[cfg(not(any(target_feature = "avx2", target_arch = "aarch64")))]
+fn sparse_l1(x: &[u8; HIDDEN], weights: &[L1Block]) -> [i32; L1] {
+let mut sums = [0i32; L1];
+let mut blocks = [0u16; HIDDEN / 4 + 8];
+let mut count = 0;
+for base in (0..HIDDEN / 4).step_by(8) {
+    let mut mask = 0;
+    for offset in 0..8 {
+        if x[(base + offset) * 4..(base + offset + 1) * 4].iter().any(|&v| v != 0) { mask |= 1 << offset; }
+    }
+    let indices = &NONZERO8[mask];
+    for k in 0..8 { blocks[count + k] = base as u16 + indices.offsets[k]; }
+    count += indices.len as usize;
+}
+for &block in &blocks[..count] {
+        let block = block as usize;
+        for (o, sum) in sums.iter_mut().enumerate() {
+            for j in 0..4 { *sum += x[block * 4 + j] as i32 * weights[block].0[o * 4 + j] as i32; }
+        }
+    }
+    sums
+}
+
 /// Evaluation in centipawns from the side to move's point of view.
 /// `pieces` = number of pieces on the board (both colors, kings included), which picks the bucket.
 pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
@@ -363,10 +510,15 @@ pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
         pairwise_inputs(&acc[side].vals, &mut x.0[base..base + HALF]);
     }
     let q = unsafe { L1Q.unwrap_unchecked() };
+    // VNNI retains its dense fast path. AVX2, NEON and scalar use the same sparse blocks.
+    let dots: [i32; L1] = if cfg!(target_feature = "avxvnni") {
+        std::array::from_fn(|o| dot_u8_i8(&x.0, &q.w[(bucket * L1 + o) * HIDDEN..(bucket * L1 + o + 1) * HIDDEN]))
+    } else {
+        sparse_l1(&x.0, &q.blocks[bucket * (HIDDEN / 4)..(bucket + 1) * (HIDDEN / 4)])
+    };
     let mut h1 = net.l1b[bucket];
     for (o, h) in h1.iter_mut().enumerate() {
-        let row = &q.w[(bucket * L1 + o) * HIDDEN..(bucket * L1 + o + 1) * HIDDEN];
-        *h += dot_u8_i8(&x.0, row) as f32 * q.mul[bucket * L1 + o];
+        *h += dots[o] as f32 * q.mul[bucket * L1 + o];
     }
     let mut h2 = net.l2b[bucket];
     for (j, &h) in h1.iter().enumerate() {
@@ -389,6 +541,35 @@ pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
 mod tests {
     use super::*;
     use crate::attacks;
+
+    #[test]
+    fn sparse_blocks_match_dense_dots() {
+        let mut seed = 0xa432_2817_4521_789bu64;
+        let mut rand = || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+        let w: Vec<i8> = (0..OUTPUT_BUCKETS * L1 * HIDDEN).map(|_| rand() as i8).collect();
+        let packed = pack_l1(&w);
+        #[repr(align(32))]
+        struct Inputs([u8; HIDDEN]);
+        for trial in 0..320 {
+            let mut x = Inputs([0; HIDDEN]);
+            for i in 0..HIDDEN {
+                x.0[i] = if trial < 256 {
+                    if trial & (1 << ((i / 4) % 8)) != 0 { 127 } else { 0 }
+                } else if trial == 256 {
+                    127
+                } else {
+                    (rand() & 127) as u8
+                };
+            }
+            let b = trial % OUTPUT_BUCKETS;
+            let actual = sparse_l1(&x.0, &packed[b * (HIDDEN / 4)..(b + 1) * (HIDDEN / 4)]);
+            for o in 0..L1 {
+                let row = &w[(b * L1 + o) * HIDDEN..(b * L1 + o + 1) * HIDDEN];
+                let expected: i32 = x.0.iter().zip(row).map(|(&a, &b)| a as i32 * b as i32).sum();
+                assert_eq!(actual[o], expected, "trial {trial}, bucket {b}, output {o}");
+            }
+        }
+    }
 
     #[test]
     fn integer_dot_matches_scalar_oracle() {
