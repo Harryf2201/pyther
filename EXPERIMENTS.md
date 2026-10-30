@@ -199,3 +199,20 @@ Counts, hashes, generation/validation commands and the deployment/Claude validat
 are in `testing/books/pyther-unbal-v1-report.md` (lab sibling of this repo).
 Sensitivity remains unmeasured until paired cloud tests run. Keep release comparisons on
 `8moves_v3.pgn`; compare books using normalized paired Elo and LLR per game.
+
+## Oct 30: v2.6 (power-loss net, speed, frozen parameters), cloud screens, data audit
+
+All game results are GitHub cloud tests at 8+0.08, 3600 games each, unless noted.
+
+| Experiment | Result | Verdict | Where |
+|---|---|---|---|
+| Power loss: big7 net (same data and recipe) trained with abs(error)^2.5 instead of squared error, vs v2.6-dev | **+11.9 +/- 5.6**; gen6 hold-out MSE slightly worse (0.017016 vs 0.016878, not the training target) | **Kept: v2.6's network**; all later nets train with -Loss p2.5 | x26d-p25, multiload f277a1c |
+| Speed2 NNUE (AVX2 sparse L1 + 4-sum dots; ARM keeps dense dotprod) + "frozen" build (all search parameters compiled in) + 3 small fixes (mate on the 50th move, TB-band ply normalisation in the TT, 50-move guard on TT mate/TB scores), same net and options, vs v2.6-dev | **+9.2 +/- 5.0** (speed: AVX2 +8% from speed2, frozen +4.5-5% on PC and ARM, node-identical) | Kept | x26c-rc0, branches speed2, frozen, v26rc, v26rc-cloud |
+| v2.6 candidate (both of the above) vs v2.5 | **+30.1 +/- 4.1** (7200 g, 8+0.08); 40+0.4: +21.6 +/- 5.7 (2400 g) | **Released as v2.6**; on the bot from Oct 30 11:15 UTC | x26c-rc1, branch v26 |
+| Sprint 12: prior-move bonus on fail-low (SprPriorBonus 100) | -10.8 +/- 5.5 | Dropped | s12-prior |
+| Gen8 pilot data: big7 + 255M gen8 (7.7%), MSE | -7.4 +/- 5.7 | Dropped; gen8+p2.5 run stopped at sb180 | x26d-gen8a |
+| Gen8 data audit (Codex) | Conversion exact; fitted score-to-result scale K drifts gen5/6 274 -> gen7 ~316 -> gen8 352-373 (worst in endgames); draws among abs(score)>=1000: 1.2% -> 6.8%; adding data also cut old-data passes 15.7 -> 14.5 | Per-file score rescaling in the trainer next (trainer-next) | testing\coord\gen8-data-audit-20261030 |
+| Codex search bug hunt (8 findings) | Most are standard trade-offs or were screened before (rep3, qsearch context/draws/promotions); 3 cheap fixes taken (above) | Fixes in v2.6 | testing\coord\bughunt\2026-10-30 |
+| ARM-only NNUE speed-ups (bucket-packed L2/L3, 16-wide NEON pairwise, shared-input SDOT L1) | node-identical; +0.6% on the N1 bot server (8/10 paired benches); x86 neutral | For v2.7 | branch armspeed |
+| Bot: online tablebase below 8 s on the clock? 703 low-clock 6-7 piece moves checked against the Lichess tablebase | 0 result-changing moves | No change | testing\lichess\review |
+| Unbalanced measurement book from our own engine (12,596 starts, 70-130 cp, extended from 8moves_v3) + optional per-test book in the cloud workflow | Sensitivity check queued | Screens only; release checks stay on 8moves_v3 | testing\books\pyther-unbal-v1.*, master 3851d3a |
