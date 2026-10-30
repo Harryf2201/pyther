@@ -50,6 +50,14 @@ static mut NET: Option<&'static Network> = None;
 #[repr(C, align(64))]
 struct L1Block([i8; 64]);
 
+/// Runtime-only bucket-local float rows. Serialized network layout stays unchanged.
+#[derive(Clone, Copy)]
+#[repr(C, align(64))]
+struct TailWeights {
+    l2w: [[f32; L2]; L1],
+    l3w: [f32; L2],
+}
+
 /// Quantised L1 with dense VNNI rows and sparse input-major blocks.
 struct L1Quant {
     w: Vec<i8>,
@@ -57,6 +65,7 @@ struct L1Quant {
     blocks: Vec<L1Block>,
     /// Per (bucket, output) row.
     mul: Vec<f32>,
+    tails: [TailWeights; OUTPUT_BUCKETS],
 }
 static mut L1Q: Option<&'static L1Quant> = None;
 
@@ -76,8 +85,12 @@ fn set_net(net: &'static Network) {
         }
     }
     let blocks = pack_l1(&w);
+    let tails = std::array::from_fn(|b| TailWeights {
+        l2w: std::array::from_fn(|j| net.l2w[j][b]),
+        l3w: std::array::from_fn(|k| net.l3w[k][b]),
+    });
     unsafe {
-        L1Q = Some(Box::leak(Box::new(L1Quant { w, blocks, mul })));
+        L1Q = Some(Box::leak(Box::new(L1Quant { w, blocks, mul, tails })));
         NET = Some(net);
     }
 }
@@ -552,6 +565,7 @@ fn tail(dots: [i32; L1], bucket: usize) -> i32 {
 fn tail_value(dots: [i32; L1], bucket: usize) -> f32 {
     let net = net();
     let q = unsafe { L1Q.unwrap_unchecked() };
+    let weights = &q.tails[bucket];
     let mut h1 = net.l1b[bucket];
     for (o, h) in h1.iter_mut().enumerate() {
         *h += dots[o] as f32 * q.mul[bucket * L1 + o];
@@ -560,7 +574,7 @@ fn tail_value(dots: [i32; L1], bucket: usize) -> f32 {
     for (j, &h) in h1.iter().enumerate() {
         let x = h.clamp(0.0, 1.0);
         let x = x * x;
-        let w = &net.l2w[j][bucket];
+        let w = &weights.l2w[j];
         for o in 0..L2 {
             h2[o] += w[o] * x;
         }
@@ -568,7 +582,7 @@ fn tail_value(dots: [i32; L1], bucket: usize) -> f32 {
     let mut out = net.l3b[bucket];
     for (k, &h) in h2.iter().enumerate() {
         let x = h.clamp(0.0, 1.0);
-        out += net.l3w[k][bucket] * x * x;
+        out += weights.l3w[k] * x * x;
     }
     out
 }
