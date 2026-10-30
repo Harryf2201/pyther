@@ -290,8 +290,10 @@ fn pairwise_inputs(v: &[i16; HIDDEN], out: &mut [u8]) {
         while i < HALF {
             // vqrdmulh(a << 6, b) = (a * b * 64 * 2 + 2^15) >> 16 = round(a * b / 512), as mulhrs on x86.
             let r = vqrdmulhq_s16(vshlq_n_s16::<6>(clip(v.as_ptr().add(i))), clip(v.as_ptr().add(i + HALF)));
-            vst1_u8(out.as_mut_ptr().add(i), vqmovun_s16(r));
-            i += 8;
+            let s = vqrdmulhq_s16(vshlq_n_s16::<6>(clip(v.as_ptr().add(i + 8))), clip(v.as_ptr().add(i + HALF + 8)));
+            // Two independent products, one full-width narrowing store.
+            vst1q_u8(out.as_mut_ptr().add(i), vcombine_u8(vqmovun_s16(r), vqmovun_s16(s)));
+            i += 16;
         }
     }
 }
