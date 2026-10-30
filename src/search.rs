@@ -159,6 +159,15 @@ struct CorrKeys {
 }
 
 #[derive(Clone, Copy)]
+struct PriorQuiet {
+    mv: Move,
+    idx: usize,
+    side: usize,
+    rows: HistoryRows,
+    threats: u64,
+}
+
+#[derive(Clone, Copy)]
 struct PlyInfo {
     static_eval: i32,
     /// piece * 64 + to of the move played at this ply (for continuation history), or NO_CONT.
@@ -166,11 +175,12 @@ struct PlyInfo {
     excluded: Move,
     /// Reduction applied to the move searched from this ply (for hindsight depth adjustment at the child).
     reduction: i32,
+    prior_quiet: Option<PriorQuiet>,
 }
 
 impl Default for PlyInfo {
     fn default() -> Self {
-        PlyInfo { static_eval: NO_EVAL, cont: NO_CONT, excluded: Move::NULL, reduction: 0 }
+        PlyInfo { static_eval: NO_EVAL, cont: NO_CONT, excluded: Move::NULL, reduction: 0, prior_quiet: None }
     }
 }
 
@@ -1042,6 +1052,7 @@ impl Searcher {
                 self.tt.prefetch(nb.hash);
                 self.acc[ply + 1] = self.acc[ply];
                 self.stack[ply].cont = NO_CONT;
+                self.stack[ply].prior_quiet = None;
                 self.hashes.push(nb.hash);
                 let s = -self.negamax(&nb, depth - r, -beta, -beta + 1, ply + 1, !cut_node);
                 self.hashes.pop();
@@ -1090,6 +1101,7 @@ impl Searcher {
                     self.tt.prefetch(nb.hash);
                     self.nnue_update(b, mv, ply);
                     self.stack[ply].cont = b.mailbox[mv.from()] as usize * 64 + mv.to();
+                    self.stack[ply].prior_quiet = None;
                     self.hashes.push(nb.hash);
                     let mut s = -self.qsearch(&nb, -pc_beta, -pc_beta + 1, ply + 1);
                     if s >= pc_beta {
@@ -1223,6 +1235,10 @@ impl Searcher {
                 ext = 1;
             }
             self.stack[ply].cont = b.mailbox[mv.from()] as usize * 64 + mv.to();
+            // Save the move's own parent context, never the child's pawn/threat keys.
+            self.stack[ply].prior_quiet = if p(P::SprPriorBonus) > 0 && is_quiet {
+                Some(PriorQuiet { mv, idx: self.stack[ply].cont, side: b.stm, rows, threats })
+            } else { None };
             self.hashes.push(nb.hash);
             legal += 1;
             let mut new_depth = depth - 1 + ext;
@@ -1350,6 +1366,18 @@ impl Searcher {
         }
 
         if excluded.is_null() {
+            if p(P::SprPriorBonus) > 0 && best_move.is_null() && !in_check && ply > 0 {
+                if let Some(q) = self.stack[ply - 1].prior_quiet {
+                    let bonus = ((p(P::HistBonusMul) * depth - 50).min(p(P::HistBonusMax))
+                        * p(P::SprPriorBonus) / 100).clamp(0, HIST_MAX);
+                    let (tf, tt) = ((q.threats >> q.mv.from()) as usize & 1,
+                                    (q.threats >> q.mv.to()) as usize & 1);
+                    gravity(&mut self.butterfly[q.side][tf][tt][q.mv.from()][q.mv.to()], bonus);
+                    gravity(&mut self.pawn_hist[q.rows.pawn + q.idx], bonus);
+                    if let Some(row) = q.rows.cont1 { gravity(&mut self.cont1[row + q.idx], bonus); }
+                    if let Some(row) = q.rows.cont2 { gravity(&mut self.cont2[row + q.idx], bonus); }
+                }
+            }
             if p(P::SprFhBlend) > 0 && best >= beta && best.abs() < TB_WIN && beta.abs() < TB_WIN {
                 best = (best * depth + beta) / (depth + 1);
             }
