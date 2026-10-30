@@ -78,12 +78,22 @@ mod tt_eval_tests {
         (b, s)
     }
 
+    // The fixture's raw 1000 fades to 600 at halfmove 80. Account for the
+    // compiled evaluation scales as frozen.options may override their defaults.
+    fn fixture_eval() -> i32 {
+        let e = 600 * p(P::SprEvalScale) / 100;
+        let scale = p(P::SprMatScale);
+        if scale > 0 { e * (scale + 36) / (scale + 264) } else { e }
+    }
+
     #[test]
     fn cached_eval_uses_current_halfmove_clock() {
         let (b, mut s) = position();
         // Force a raw static eval into the TT; the upper bound cannot cut this window.
         s.tt.store(b.hash, Move::NULL, -1000, 1000, 0, BOUND_UPPER, false);
-        assert_eq!(s.qsearch(&b, 500, 600, 1), 600);
+        let expected = fixture_eval();
+        assert_eq!(Searcher::fade_eval(&b, 1000), 600);
+        assert_eq!(s.qsearch(&b, expected - 100, expected, 1), expected);
     }
 
     #[test]
@@ -92,9 +102,10 @@ mod tt_eval_tests {
         s.tt.store(b.hash, Move::NULL, -1000, 1000, 0, BOUND_UPPER, false);
         s.optimism = [200, -200];
         // The lone queen has material 36/264, adding 27 cp after the halfmove fade.
-        assert_eq!(s.qsearch(&b, 500, 600, 1), 627);
+        let expected = fixture_eval();
+        assert_eq!(s.qsearch(&b, expected - 100, expected, 1), expected + 27);
         s.optimism = [-200, 200];
-        assert_eq!(s.qsearch(&b, 500, 550, 1), 573);
+        assert_eq!(s.qsearch(&b, expected - 100, expected - 50, 1), expected - 27);
         assert_eq!(s.tt.probe(b.hash).unwrap().eval, 1000);
         assert_eq!(Searcher::eval_material(&Board::startpos()), 264);
     }
@@ -118,8 +129,9 @@ mod tt_eval_tests {
     #[test]
     fn correction_history_does_not_learn_halfmove_scaling() {
         let (b, mut s) = position();
-        assert_eq!(s.corrected(&b, 1000, &s.corr_keys(&b, 1)), 600);
-        s.update_corr(&b, 1000, 600, 8, &s.corr_keys(&b, 1));
+        let expected = fixture_eval();
+        assert_eq!(s.corrected(&b, 1000, &s.corr_keys(&b, 1)), expected);
+        s.update_corr(&b, 1000, expected, 8, &s.corr_keys(&b, 1));
         assert_eq!(s.corr[b.stm][pawn_key(&b)], 0);
         assert_eq!(s.np_corr[b.stm][WHITE][non_pawn_key(&b, WHITE)], 0);
         assert_eq!(s.np_corr[b.stm][BLACK][non_pawn_key(&b, BLACK)], 0);

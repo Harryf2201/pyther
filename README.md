@@ -19,6 +19,18 @@ cargo build --release
 ./target/release/pawnstorm perft    # move generation correctness test
 ```
 
+For a build with fixed search parameters, use `cargo build --release --offline -j 4
+--features frozen`. `frozen.options` contains `Name=value` overrides; parameters
+omitted from that file keep their defaults in `src/param_defs.rs`. The build
+rejects unknown names, malformed values and values outside the declared bounds.
+Changing the file triggers regeneration. The feature is off by default.
+
+Frozen builds keep advertising the usual UCI options. Setting a parameter to its
+compiled value is silent; any other value is ignored with an `info string`
+message naming the compiled value. Hash, Threads, EvalFile and other non-parameter
+options work as usual. Rebuild to change a frozen parameter. Local validation
+commands and ARM instructions are in `validation/report.md`.
+
 ## Training data
 
 `pawnstorm datagen <threads> <positions> <soft-nodes> <out-dir> [seconds] [seed]` plays fast
