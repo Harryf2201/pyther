@@ -1,4 +1,4 @@
-"""Check build failure on invalid input, defaults, and feature-off independence."""
+"""Check build failure on invalid input, defaults, and case-insensitive overrides."""
 import ast
 import ctypes
 import json

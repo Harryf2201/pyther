@@ -358,3 +358,21 @@ machine code and computational data identical. Final retained candidate: nine
 release tests and complete depth-20/bench parity in all three builds. No board
 changes, new UCI options, version bump, cloud tests or remote operations.
 Detailed report/reproduction: ../testing/coord/codex-speed2-avx2-report-2026-10-30.md.
+
+### Oct 30: opt-in frozen search parameters (branch frozen)
+
+From v26cand e6bfdf0: --features frozen generates an always-inline const-indexed
+parameter table from frozen.options (copied from x25-big7.options), rejecting
+unknown/out-of-range inputs at build time. UCI options remain listed; matching
+values are silent, differing values warn and are ignored. Feature off retains
+mutable parameters and generation behavior; no search struct layouts changed.
+Native/AVX2, both feature sets: all 80 requested position comparisons pass
+(nodes/score/best/ponder/PV; 12 d15 + 8 d17 per case); 10 existing release tests
+pass per matrix entry with RUST_TEST_THREADS=1 (pre-existing shared-net test race
+under parallel execution). Three test expectations now account for baked eval
+scales. Six paired d20/12-position rounds, CPU-0 affinity, BelowNormal and
+throttling opt-out: native median wall +5.20% [-1.64%, +7.82%], CPU +6.47%
+[+0.86%, +8.94%]; AVX2-only wall +4.46% [+0.79%, +6.12%], CPU +6.64%
+[-4.10%, +11.08%]. Each round 9,393,267 identical nodes. Busy-PC sample, no Elo
+claim, ARM untested. No deployment/version bump or remote operation. Design,
+commands, raw-data locations and exact ARM checklist: validation/report.md.

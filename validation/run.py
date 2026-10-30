@@ -5,7 +5,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 LAB = ROOT.parent / 'testing'
 FENS = re.findall(r'(?m)^    "([^"]+)",', (ROOT/'src/bench.rs').read_text().split('/// Known perft')[0])
 FENS.insert(0, 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1')
-OPTIONS = dict(x.split('=',1) for x in (LAB/'engines/x25-big7.options').read_text().splitlines() if '=' in x)
+OPTIONS = {}
+for text in (ROOT/'frozen.options').read_text().splitlines():
+    text = text.strip()
+    if text and not text.startswith('#'):
+        name, value = text.split('=', 1)
+        OPTIONS[name.strip()] = value.strip()
 def health():
     while (LAB/'health/control.txt').exists() and (LAB/'health/control.txt').read_text().strip().lower().startswith('pause'):
         print('Health pause',flush=True); time.sleep(10)

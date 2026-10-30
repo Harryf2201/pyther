@@ -19,8 +19,8 @@ cargo build --release
 ./target/release/pawnstorm perft    # move generation correctness test
 ```
 
-For a build with fixed search parameters, use `cargo build --release --offline -j 4
---features frozen`. `frozen.options` contains `Name=value` overrides; parameters
+For a build with fixed search parameters, use
+`cargo build --release --offline -j 4 --features frozen`. `frozen.options` contains `Name=value` overrides; parameters
 omitted from that file keep their defaults in `src/param_defs.rs`. The build
 rejects unknown names, malformed values and values outside the declared bounds.
 Changing the file triggers regeneration. The feature is off by default.
