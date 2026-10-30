@@ -1187,20 +1187,28 @@ impl Searcher {
 
             if !root && best > -MATE_BOUND {
                 if is_quiet {
+                    // Predict child depth using the base LMR and its existing history term.
+                    // LMP and history pruning deliberately retain the unreduced node depth.
+                    let prune_depth = if p(P::SprLmrDepthPrune) > 0 {
+                        let hist_r = if scores[i] >= 2_000_000 { 1 }
+                            else { (scores[i] / p(P::LmrHistDiv)).clamp(-2, 2) };
+                        let r = (self.lmr[depth.min(63) as usize][(legal + 1).min(63) as usize] - hist_r).max(0);
+                        (depth - 1 - r).max(0)
+                    } else { depth };
                     let lmp_limit = (p(P::LmpBase) + depth * depth) / (2 - improving as i32);
                     if depth <= 8 && legal >= lmp_limit {
                         skip_quiets = true;
                         continue;
                     }
-                    if !in_check && depth <= 8 && eval + p(P::FutBase) + p(P::FutMul) * depth <= alpha {
-                        skip_quiets = true;
+                    if !in_check && prune_depth <= 8 && eval + p(P::FutBase) + p(P::FutMul) * prune_depth <= alpha {
+                        if p(P::SprLmrDepthPrune) == 0 { skip_quiets = true; }
                         continue;
                     }
                     // History pruning: quiet moves that have kept failing elsewhere.
                     if !in_check && depth <= 4 && scores[i] < -p(P::HistPrune) * depth {
                         continue;
                     }
-                    if depth <= 8 && !b.see(mv, -p(P::SeeQuiet) * depth) {
+                    if prune_depth <= 8 && !b.see(mv, -p(P::SeeQuiet) * prune_depth) {
                         continue;
                     }
                 } else {
