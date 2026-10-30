@@ -18,5 +18,5 @@ panic = "abort"
 debug = false
 
 [features]
-default = []
+default = ["dualact"]
 dualact = []
