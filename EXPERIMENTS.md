@@ -249,3 +249,112 @@ SprMatScale=400 + SprOptimism=100: 240939 nodes, both exact reference parity. Ea
 completed depth 10 at its suggested value with clocks/increments supplied. Searches ran
 below normal priority. Local verification script and logs: ignored target/verify-xsearch.ps1
 and target/xsearch-*.log. No ARM or playing-strength tests run.
+
+## Oct 30: speed2, exact 1024-wide integer L1 dot kernel
+
+Branch `speed2`, parent `xsearch` / `94f4385`. Only retained implementation change:
+`src/nnue.rs::dot_u8_i8` uses four independent integer sums, with AVX-VNNI
+`vpdpbusd` when enabled by the build target. AVX2 fallback, NEON dotprod/widening
+fallback, and scalar code traverse matching 128-input blocks. Floating-point
+layers, weights, quantisation, search, and UCI options are unchanged.
+
+Profile first: temporary cycle scopes, then a 1/64 sampled/calibrated baseline
+profile, depth 20 on eight bench positions with x25-big7 plus every supplied
+option. Approximate inclusive shares: accumulator update/copy 11-22%, NNUE
+28-45% (L1 dot products 14-22%), generation 3-5%, legality 4-11%, SEE 5-9%,
+TT 2-6%, move scoring 9-11% (overlaps SEE), history/correction updates 2-6%.
+Timer overhead and scheduling make these estimates, not additive accounting.
+
+Final confirmation: six alternating pairs, 12 FENs, depth 20, Threads=1,
+Hash=16, fresh TT/history per position, CPU 0, BelowNormal, process power
+throttling disabled. Rebuilt baseline median 1,331,274 NPS (range
+1,303,534-1,352,328); candidate 1,400,180 (1,342,471-1,463,126): +5.18%
+ratio of medians. Paired median +5.61%, range +1.32% to +9.98%, six of six
+positive. An earlier independent six-pair sample had paired median +5.99%
+(range -10.58% to +39.32%, stronger scheduling noise). CPU-time paired medians
+were +6.43% and +6.32%, respectively. These are PC measurements, not ARM gains.
+
+Rejected, not retained: 64-byte accumulator-frame padding (six pairs, -1.55%
+ratio of medians); i16 continuation/pawn histories (first six +4.69%, second
+six -2.22% wall / -3.36% CPU; not reproducibly faster). PGO skipped; no i8-weight
+or sparse-L1 retrial. No search changes, new UCI options, or version bump.
+
+Parity against pawnstorm-xsearch5.exe, x25-big7 and options: all 12 depth-20
+nodes/scores/bestmoves match for native VNNI and AVX2 fallback; bench matches
+9,393,267 nodes. Scalar matches all 12 reference depth-16 searches (1,991,562
+nodes). Eight release tests pass in all three builds, including adversarial
+and randomized integer-dot differential tests. All six standard perfts pass.
+Integer magnitude is bounded by 1024*127*128 = 16,646,144, so integer
+reassociation cannot overflow and AVX2 pair sums cannot saturate.
+
+Claude must compile/test/time the changed NEON `dot_u8_i8` loop (128 stride,
+two 16-byte loads per stream), both dotprod and widening paths, on ARM; require
+matching searches there. No ARM speed/Elo claim. PC gain would suggest about
+3-4 Elo under the round's rough heuristic; no matches were run.
+Full report, binaries, scripts, JSON samples, profiling sources, and logs:
+`../testing/speed2/` and `../testing/coord/codex-speed2-report-2026-10-30.md`.
+## Oct 30 follow-up: AVX2-only and block-transposed sparse integer L1
+
+Deployment context: cloud runners are Zen 3 (AVX2/BMI2, no AVX-VNNI); bot is
+Neoverse N1 (NEON/dotprod). All speed measurements here are still on the PC,
+with `-C target-cpu=native -C target-feature=-avxvnni`, not actual Zen 3 hardware.
+The a4ed84f AVX2 four-accumulator loop vs 94f4385: six alternating depth-20
+pairs, +1.53% ratio of median NPS; paired +1.53% [-1.80%,+5.62%]. CPU median
++2.14%. Retain the loop; no evidence of regression requiring the old AVX2 loop.
+
+Measured 7,262,081 actual evaluations using x25-big7 plus all options, 12 FENs,
+depth 20: 47.633% of four-byte input groups nonzero (122/256 median;
+p10=111, p90=133). Historical sparse code located at 1bdfd71 branches on
+individual products and uses bucket-interleaved f32 rows. This trial instead
+repacks the already-quantised weights at load time into aligned 64-byte rows,
+[bucket][four-input block][output][four weights]. The serialized network and
+quantisation are unchanged. AVX2 movemask + 256-entry lookup compacts nonzero
+indices, then one broadcast and two maddubs/madd vector pairs update all 16
+outputs. NEON dotprod/widening and scalar use the same block layout/index order.
+VNNI builds retain the dense fast path. Extra packed weights cost 128 KiB/net.
+
+First packed implementation used many short data-dependent loops: -20.41%
+median NPS (six pairs), dropped. One compacted-index loop gave marginal gains;
+64-byte block alignment improved it substantially. Retained aligned version:
+six position-interleaved A/B pairs, +5.49% median NPS (+5.49% paired median,
+range -0.58%..+6.19%); independent six whole-suite A/B pairs confirmed:
+baseline 1,369,255 NPS [1,335,409..1,401,980], candidate 1,477,285
+[1,379,334..1,492,416], +7.89% ratio of medians. Paired median +6.54%,
+range +2.64%..+8.44%, all six positive; CPU paired +6.52% [3.69%..11.15%].
+These per-change numbers are relative to a4ed84f AVX2-only.
+
+Method: CPU 0 P-core, BelowNormal, execution throttling disabled, Threads=1,
+Hash=16, fresh TT/history per position, no builds during timings. All 12 FENs,
+depth 20, x25-big7.nnue plus every .options line. Native VNNI, AVX2-only and
+scalar builds all pass 9 release tests, all 12 reference node/score/best/ponder
+comparisons, and bench 9,393,267 nodes. New sparse oracle test covers every
+8-bit group mask and random/extreme inputs/weights. No new UCI options or
+version bump. NNUE arithmetic/float order unchanged; no board changes.
+Claude must compile/test/time the new NEON sparse mask/index/dotprod loop and
+its widening fallback on ARM. No measured N1 or EPYC gain claimed.
+Raw sources, scripts, logs and JSON: ../testing/speed2/r2-*.
+### speed2 follow-up: lazy accumulator trial rejected, total AVX2-only result
+
+Tried lazy normal/null accumulators after the sparse L1 commit. Stored four-byte
+move/piece/capture descriptors and dirty flags (no Board pointers), materialized
+parent chains only when needed. Separate counters found 8,480,601 normal stages
+vs 7,542,392 applications, and 491,068 null stages vs 364,187 copies: 11.87%
+combined unused. Despite those savings, six position-interleaved AVX2-only pairs
+regressed: 1,499,935 -> 1,403,348 median NPS (-6.44%), paired median -6.43%
+[-7.72%..-5.37%]. CPU paired -9.33%. All six pairs slower. Rejected and removed;
+source/patch/counter scripts retained only in ../testing/speed2/r2-lazy*.
+The rejected trial nevertheless passed ten release tests and all 12 depth-20
+nodes/scores/best/ponder comparisons plus bench in native, AVX2-only and scalar.
+
+Final retained source is bb1e378 (aligned sparse L1). Direct total comparison
+against AVX2-only 94f4385, six whole-suite pairs: 1,323,204 median NPS
+[1,190,830..1,436,499] -> 1,429,644 [1,279,911..1,521,916], +8.04% ratio of
+medians; paired median +6.71% [+2.66%..+16.39%], all six positive. CPU median
+ratio +6.48%, paired +4.15% [+1.84%..+12.68%]. These Intel-PC results with VNNI
+disabled do not establish EPYC or N1 gains; both still need deployment verification.
+Native, AVX2-only and scalar build outputs were restored to the retained source;
+rebuilds differ from verified binaries only in linker/debug metadata, with all
+machine code and computational data identical. Final retained candidate: nine
+release tests and complete depth-20/bench parity in all three builds. No board
+changes, new UCI options, version bump, cloud tests or remote operations.
+Detailed report/reproduction: ../testing/coord/codex-speed2-avx2-report-2026-10-30.md.
