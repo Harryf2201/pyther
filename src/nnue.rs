@@ -521,6 +521,28 @@ mod tests {
     use super::*;
     use crate::attacks;
 
+    #[cfg(feature = "kb4nm")]
+    #[test]
+    fn trainer_feature_contract() {
+        let layout = [0,0,1,1,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3];
+        let mut checked = 0;
+        for persp in 0..2 { for king in 0usize..64 {
+            let abs = king ^ if persp == BLACK {56} else {0};
+            let other = if abs == 0 {63} else {0};
+            let mut b = Board::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
+            b.colors[persp] = 1u64 << abs; b.colors[persp ^ 1] = 1u64 << other;
+            b.pieces[KING] = b.colors[0] | b.colors[1];
+            let expected_zone = layout[king/8*4 + (king%8).min(7-king%8)];
+            assert_eq!(persp_zone(&b,persp),expected_zone);
+            for pc in 0..12 { for sq in 0..64 {
+                let expected = 768*expected_zone + usize::from(pc/6!=persp)*384 + pc%6*64 + (sq ^ if persp==BLACK {56} else {0});
+                assert_eq!(768*persp_zone(&b,persp)+feature(persp,pc,sq),expected);
+                checked += 1;
+            }}
+        }}
+        println!("{checked} feature indices match the trainer's unmirrored zone contract");
+    }
+
     /// Incremental updates must exactly match a from-scratch refresh after every kind of move.
     #[test]
     fn incremental_matches_refresh() {

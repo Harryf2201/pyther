@@ -264,3 +264,7 @@ AVX2-only and scalar, with .303 cp mean/.840 cp p95 error versus float checkpoin
 Paired smoke-net NPS ratios Finny/full-refresh: 1.028 native, 1.038 AVX2-only,
 both noisy confidence intervals include 1. No full-net strength or ARM claim.
 See KB_ENGINE.md and testing/coord/kb-audit/engine-port for commands/evidence.
+Smoke inference caveat: its float range is only -.40..+.84 cp, so all integer
+outputs are zero. A CPU-only mature plain-net lift into four unmirrored zones
+gives 1885 distinct cp values and exact KB/plain equality on all 4000 FENs;
+float error 11.076 cp mean/34.075 p95. Explicit feature-contract checks added.

@@ -104,12 +104,21 @@ including exact scores/best moves. KB verification checked 46648 random moves,
 special moves, null paths, 7479 zone changes, 840 exhaustive king moves and cache
 generation invalidation. Native/AVX2-only/scalar smoke inference is identical
 on 4000 FENs; against CPU float inference mean error is .303 cp, p95 .840 cp.
+The 300-batch smoke net is nearly flat: float outputs are only -.40..+.84 cp
+and every integer engine output is zero. Its small error alone is weak evidence.
+A second CPU-only diagnostic lifts our mature plain big7 net into F, repeats its
+FT into all four zones with R=0, and changes no source network. All 4000 resulting
+KB engine outputs exactly equal the plain engine (1885 distinct cp values),
+with 11.076 cp mean/34.075 cp p95 error versus float. A separate 98304-case test
+checks engine feature indices against the explicit unmirrored trainer contract.
 
 Six alternating paired depth-24 suites (12 FENs each, 3341390 nodes per suite)
 gave Finny/full-refresh geometric NPS ratios 1.028 native and 1.038 AVX2-only.
 Approximate paired 95% intervals were .951..1.112 and .953..1.131 respectively:
 local contention prevents claiming a reliable gain. These are throughput tests,
 not playing-strength tests; see the lab report for all ranges and methodology.
+The smoke net's nearly constant output also limits extrapolation of its search
+trees and cache traffic to the fully trained bucketed net.
 
 ## ARM checks Claude must perform
 
