@@ -10,12 +10,12 @@ OPTIONS=['setoption name '+k+' value '+v for k,v in (line.split('=',1) for line 
 def health():
     while (ROOT/'testing/health/control.txt').read_text().strip().lower()=='pause':
         print('Health pause; waiting',flush=True);time.sleep(10)
-def launch(exe,net):
+def launch(exe,net,affinity=4):
     health()
     p=subprocess.Popen([str(exe)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,creationflags=0x4000)
     h=ctypes.windll.kernel32.OpenProcess(0x0200|0x0400,False,p.pid)
     if not h: raise ctypes.WinError()
-    if not ctypes.windll.kernel32.SetProcessAffinityMask(h,4): raise ctypes.WinError()
+    if not ctypes.windll.kernel32.SetProcessAffinityMask(h,affinity): raise ctypes.WinError()
     class Throttle(ctypes.Structure): _fields_=[('Version',ctypes.c_ulong),('ControlMask',ctypes.c_ulong),('StateMask',ctypes.c_ulong)]
     t=Throttle(1,1,0)
     if not ctypes.windll.kernel32.SetProcessInformation(h,4,ctypes.byref(t),ctypes.sizeof(t)): raise ctypes.WinError()

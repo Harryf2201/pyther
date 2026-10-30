@@ -1,5 +1,7 @@
 # Dual activation handoff (2026-10-30)
 
+Follow-up: [L2FAST.md](L2FAST.md) fixes the L2 code-generation regression. The speed figures below describe the initial implementation and are retained as historical evidence.
+
 Experimental trainer + engine support; no GPU evaluation, training, games, remote operations or Elo claim. The default engine remains the xsearch architecture. The feature is build-time, not a UCI parameter. Expected accuracy/Elo benefit is unknown; measured speed cost is substantial, so validate before spending a full training budget.
 
 ## Branches and files

@@ -264,3 +264,22 @@ reference, maximum 3cp deviation from float trainer graph on saved L0 weights.
 Pinned synthetic paired depth11 bench: median NPS ratio 0.7422 (25.8% loss), so the
 speed hypothesis is not met by this implementation. No accuracy/Elo evidence yet.
 No GPU/trainer execution or ARM test; Claude must verify trained agreement and NEON.
+
+## 2026-10-30: dual L2 code-generation regression fixed
+
+See L2FAST.md. Actual executable disassembly found xsearch5 already vectorises L2,
+but the extra dual input pass made LLVM scalarise both passes and spill h2 heavily.
+Feature-on explicit AVX2/NEON output-lane SIMD, ordered separate multiply/add, fixes
+this without a layout/format change. Default-off loop unchanged. Native/scalar dual
+seven-test suites pass; 1024 raw L2 bit comparisons plus 23169 move positions agree
+with scalar references. Real x25-big7 zero-expanded net: bench 90147 and six positions
+exact parity; timed eight depth15 FENs have identical 1167068-node trees.
+
+Six alternating pairs (three packets per process, P-core logical CPU6, below normal,
+power throttling disabled): old dual ratio 0.715925; fixed dual 0.971462 and confirmation
+0.981532 vs xsearch5. CPU2 one-packet fixed ratio 0.981897; a noisy extended CPU2 set
+was 0.943443 with large outliers. Full raw results retained in testing/l2-results.
+Default SIMD candidate on separate l2fast branch showed no benefit (0.989771 CPU6);
+no default runtime change retained there, tested patch preserved for reproduction.
+No GPU, trainer, ARM, cloud, release or remote actions. No Elo claim. dualact-cloud
+still needs the new fix cherry-picked before use.

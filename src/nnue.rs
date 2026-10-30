@@ -335,6 +335,59 @@ fn dot_u8_i8(x: &[u8; HIDDEN], w: &[i8]) -> i32 {
     x.iter().zip(w).map(|(&a, &b)| a as i32 * b as i32).sum()
 }
 
+// SIMD lanes are independent outputs, never a reduction over inputs. Separate
+// multiply and add preserve the scalar reference's rounding and input order.
+#[cfg(feature = "dualact")]
+#[inline(always)]
+fn layer2(net: &Network, h1: &[f32; L1], bucket: usize) -> [f32; L2] {
+    let mut input = [0.0; L2_INPUTS];
+    for j in 0..L1 {
+        let v = h1[j].clamp(0.0, 1.0);
+        input[j] = v * v;
+        input[L1 + j] = v;
+    }
+    let mut out = net.l2b[bucket];
+    #[cfg(target_feature = "avx2")]
+    unsafe {
+        use std::arch::x86_64::*;
+        let mut a = _mm256_loadu_ps(out.as_ptr());
+        let mut b = _mm256_loadu_ps(out.as_ptr().add(8));
+        let mut c = _mm256_loadu_ps(out.as_ptr().add(16));
+        let mut d = _mm256_loadu_ps(out.as_ptr().add(24));
+        for (j, &x) in input.iter().enumerate() {
+            let x = _mm256_set1_ps(x);
+            let w = net.l2w[j][bucket].as_ptr();
+            a = _mm256_add_ps(a, _mm256_mul_ps(_mm256_loadu_ps(w), x));
+            b = _mm256_add_ps(b, _mm256_mul_ps(_mm256_loadu_ps(w.add(8)), x));
+            c = _mm256_add_ps(c, _mm256_mul_ps(_mm256_loadu_ps(w.add(16)), x));
+            d = _mm256_add_ps(d, _mm256_mul_ps(_mm256_loadu_ps(w.add(24)), x));
+        }
+        _mm256_storeu_ps(out.as_mut_ptr(), a);
+        _mm256_storeu_ps(out.as_mut_ptr().add(8), b);
+        _mm256_storeu_ps(out.as_mut_ptr().add(16), c);
+        _mm256_storeu_ps(out.as_mut_ptr().add(24), d);
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        use std::arch::aarch64::*;
+        let mut sums = [vdupq_n_f32(0.0); 8];
+        for k in 0..8 { sums[k] = vld1q_f32(out.as_ptr().add(4 * k)); }
+        for (j, &x) in input.iter().enumerate() {
+            let x = vdupq_n_f32(x);
+            for k in 0..8 {
+                let w = vld1q_f32(net.l2w[j][bucket].as_ptr().add(4 * k));
+                sums[k] = vaddq_f32(sums[k], vmulq_f32(w, x));
+            }
+        }
+        for k in 0..8 { vst1q_f32(out.as_mut_ptr().add(4 * k), sums[k]); }
+    }
+    #[cfg(not(any(target_feature = "avx2", target_arch = "aarch64")))]
+    for (j, &x) in input.iter().enumerate() {
+        for o in 0..L2 { out[o] += net.l2w[j][bucket][o] * x; }
+    }
+    out
+}
+
 /// Evaluation in centipawns from the side to move's point of view.
 /// `pieces` = number of pieces on the board (both colors, kings included), which picks the bucket.
 pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
@@ -356,23 +409,21 @@ pub fn evaluate(acc: &AccPair, stm: usize, pieces: u32) -> i32 {
         let row = &q.w[(bucket * L1 + o) * HIDDEN..(bucket * L1 + o + 1) * HIDDEN];
         *h += dot_u8_i8(&x.0, row) as f32 * q.mul[bucket * L1 + o];
     }
-    let mut h2 = net.l2b[bucket];
-    for (j, &h) in h1.iter().enumerate() {
-        let x = h.clamp(0.0, 1.0);
-        let x = x * x;
-        let w = &net.l2w[j][bucket];
-        for o in 0..L2 {
-            h2[o] += w[o] * x;
-        }
-    }
     #[cfg(feature = "dualact")]
-    for (j, &h) in h1.iter().enumerate() {
-        let x = h.clamp(0.0, 1.0);
-        let w = &net.l2w[L1 + j][bucket];
-        for o in 0..L2 {
-            h2[o] += w[o] * x;
+    let h2 = layer2(net, &h1, bucket);
+    #[cfg(not(feature = "dualact"))]
+    let h2 = {
+        let mut h2 = net.l2b[bucket];
+        for (j, &h) in h1.iter().enumerate() {
+            let x = h.clamp(0.0, 1.0);
+            let x = x * x;
+            let w = &net.l2w[j][bucket];
+            for o in 0..L2 {
+                h2[o] += w[o] * x;
+            }
         }
-    }
+        h2
+    };
     let mut out = net.l3b[bucket];
     for (k, &h) in h2.iter().enumerate() {
         let x = h.clamp(0.0, 1.0);
@@ -463,6 +514,31 @@ mod tests {
         oversized.resize(NET_BYTES.next_multiple_of(64) + 1, 0);
         assert!(from_bytes(&oversized).is_err());
         set_net(from_bytes(&bytes).unwrap());
+
+        #[cfg(feature = "dualact")]
+        {
+            // Check raw L2 bits as well as end-to-end integer cp: SIMD must neither
+            // reassociate input additions nor contract multiply+add into an FMA.
+            let mut bits_seed = 0x5eeda11u64;
+            for trial in 0..1024 {
+                let bucket = trial % OUTPUT_BUCKETS;
+                let h1 = std::array::from_fn(|_| {
+                    bits_seed ^= bits_seed << 13;
+                    bits_seed ^= bits_seed >> 7;
+                    bits_seed ^= bits_seed << 17;
+                    ((bits_seed % 4097) as i32 - 1024) as f32 / 2048.0
+                });
+                let n = net();
+                let mut expected = n.l2b[bucket];
+                for j in 0..L2_INPUTS {
+                    let x = h1[j % L1].clamp(0.0, 1.0);
+                    let x = if j < L1 { x * x } else { x };
+                    for o in 0..L2 { expected[o] += n.l2w[j][bucket][o] * x; }
+                }
+                let actual = layer2(n, &h1, bucket);
+                assert_eq!(actual.map(f32::to_bits), expected.map(f32::to_bits));
+            }
+        }
 
         let fens = [
             crate::board::START_FEN,
