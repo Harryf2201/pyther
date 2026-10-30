@@ -16,6 +16,8 @@ pub const MATE: i32 = 31000;
 pub const MATE_BOUND: i32 = MATE - MAX_PLY as i32;
 /// A tablebase win: above any evaluation, below every mate score.
 pub const TB_WIN: i32 = MATE_BOUND - MAX_PLY as i32 - 1;
+/// Reserved TB band: TB_BOUND <= |score| < MATE_BOUND (when either TT fix is on).
+pub const TB_BOUND: i32 = TB_WIN - MAX_PLY as i32;
 const NO_EVAL: i32 = -INF - 1;
 const NO_CONT: usize = usize::MAX;
 const HIST_MAX: i32 = 16384;
@@ -115,7 +117,7 @@ mod tt_eval_tests {
         let (late, mut s) = position();
         let expected = if nnue::active() {
             nnue::evaluate(&s.acc[1], late.stm, late.occ().count_ones())
-        } else { evaluate(&late) }.clamp(-MATE_BOUND + 1, MATE_BOUND - 1);
+        } else { evaluate(&late) }.clamp(-eval_limit(), eval_limit());
         s.qsearch(&late, -INF, INF, 1);
         assert_eq!(s.tt.probe(late.hash).unwrap().eval, expected);
         let mut early = late;
@@ -319,20 +321,47 @@ fn gravity(v: &mut i32, bonus: i32) {
     *v += bonus - *v * bonus.abs() / HIST_MAX;
 }
 
+#[inline(always)]
+fn eval_limit() -> i32 {
+    if p(P::FixTbPly) > 0 || p(P::FixR50Tt) > 0 { TB_BOUND - 1 } else { MATE_BOUND - 1 }
+}
+
 fn score_to_tt(s: i32, ply: usize) -> i32 {
-    if s >= MATE_BOUND {
+    score_to_tt_with(s, ply, p(P::FixTbPly) > 0)
+}
+
+fn score_to_tt_with(s: i32, ply: usize, tb_ply: bool) -> i32 {
+    let bound = if tb_ply { TB_BOUND } else { MATE_BOUND };
+    if s >= bound {
         s + ply as i32
-    } else if s <= -MATE_BOUND {
+    } else if s <= -bound {
         s - ply as i32
     } else {
         s
     }
 }
 
-fn score_from_tt(s: i32, ply: usize) -> i32 {
-    if s >= MATE_BOUND {
+fn score_from_tt(s: i32, ply: usize, halfmove: u16) -> i32 {
+    score_from_tt_with(s, ply, halfmove, p(P::FixTbPly) > 0, p(P::FixR50Tt) > 0)
+}
+
+fn score_from_tt_with(s: i32, ply: usize, halfmove: u16, tb_ply: bool, r50: bool) -> i32 {
+    // TT mate scores are node-relative; with FixTbPly, so are TB scores.
+    // WDL distance means distance to a TB result, not DTZ or distance to mate.
+    if r50 && s.abs() >= TB_BOUND {
+        let distance = if s.abs() >= MATE_BOUND {
+            MATE - s.abs()
+        } else {
+            TB_WIN - s.abs() - if tb_ply { 0 } else { ply as i32 }
+        };
+        if distance > 100_u16.saturating_sub(halfmove) as i32 {
+            return s.signum() * (TB_BOUND - 1);
+        }
+    }
+    let bound = if tb_ply { TB_BOUND } else { MATE_BOUND };
+    if s >= bound {
         s - ply as i32
-    } else if s <= -MATE_BOUND {
+    } else if s <= -bound {
         s + ply as i32
     } else {
         s
@@ -473,7 +502,7 @@ impl Searcher {
         if p(P::CorrMajorW) > 0 {
             c += self.major_corr[s][pieces_key(b, &[ROOK, QUEEN, KING])] * p(P::CorrMajorW);
         }
-        (self.adjusted_eval(b, raw) + c / (CORR_GRAIN * 256)).clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+        (self.adjusted_eval(b, raw) + c / (CORR_GRAIN * 256)).clamp(-eval_limit(), eval_limit())
     }
 
     /// Moves every correction for this position towards (search score - raw static eval).
@@ -564,7 +593,7 @@ impl Searcher {
     /// Apply these on every use, including TT hits, before correction history.
     fn raw_eval(&self, b: &Board, ply: usize) -> i32 {
         let e = if nnue::active() { nnue::evaluate(&self.acc[ply], b.stm, b.occ().count_ones()) } else { evaluate(b) };
-        e.clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+        e.clamp(-eval_limit(), eval_limit())
     }
 
     fn fade_eval(b: &Board, raw: i32) -> i32 {
@@ -590,7 +619,7 @@ impl Searcher {
             }
             e += self.optimism[b.stm] * material / REF;
         }
-        e.clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+        e.clamp(-eval_limit(), eval_limit())
     }
 
     fn eval(&self, b: &Board, ply: usize) -> i32 {
@@ -959,6 +988,9 @@ impl Searcher {
         }
         let in_check = b.in_check();
         if !root {
+            if p(P::FixMate50) > 0 && b.halfmove >= 100 && in_check && b.legal_moves().is_empty() {
+                return -MATE + ply as i32;
+            }
             if b.halfmove >= 100 || b.is_insufficient_material() || self.is_repetition(b) {
                 // Like repetition, these path-dependent returns bypass TT storage.
                 return self.draw_score[b.stm];
@@ -980,7 +1012,7 @@ impl Searcher {
         let tt_pv = pv_node || tt_entry.is_some_and(|e| e.pv);
         let tt_move = tt_entry.map_or(Move::NULL, |e| e.mv);
         if let Some(e) = tt_entry {
-            let s = score_from_tt(e.score, ply);
+            let s = score_from_tt(e.score, ply, b.halfmove);
             if !pv_node
                 && e.depth >= depth
                 && (e.bound == BOUND_EXACT
@@ -1012,7 +1044,7 @@ impl Searcher {
                     -1 => -TB_WIN + ply as i32,
                     _ => 0,
                 };
-                self.tt.store(b.hash, Move::NULL, s, NO_EVAL, (depth + 6).min(MAX_PLY as i32 - 1), BOUND_EXACT, tt_pv);
+                self.tt.store(b.hash, Move::NULL, score_to_tt(s, ply), NO_EVAL, (depth + 6).min(MAX_PLY as i32 - 1), BOUND_EXACT, tt_pv);
                 return s;
             }
         }
@@ -1043,7 +1075,7 @@ impl Searcher {
             eval = static_eval;
             // A TT score is a better estimate than the static eval when its bound allows it.
             if let Some(e) = tt_entry {
-                let s = score_from_tt(e.score, ply);
+                let s = score_from_tt(e.score, ply, b.halfmove);
                 if s.abs() < MATE_BOUND
                     && (e.bound == BOUND_EXACT
                         || (e.bound == BOUND_LOWER && s > eval)
@@ -1138,7 +1170,7 @@ impl Searcher {
             let pc_beta = beta + p(P::ProbcutMargin);
             if depth >= 5
                 && beta.abs() < MATE_BOUND
-                && !tt_entry.is_some_and(|e| e.depth >= depth - 3 && score_from_tt(e.score, ply) < pc_beta)
+                && !tt_entry.is_some_and(|e| e.depth >= depth - 3 && score_from_tt(e.score, ply, b.halfmove) < pc_beta)
             {
                 let mut list = MoveList::new();
                 b.gen_moves(&mut list, true);
@@ -1284,7 +1316,7 @@ impl Searcher {
             let mut ext = 0;
             if !root && depth >= p(P::SprSeDepth) && mv == tt_move && excluded.is_null() {
                 let e = tt_entry.unwrap();
-                let tt_score = score_from_tt(e.score, ply);
+                let tt_score = score_from_tt(e.score, ply, b.halfmove);
                 if e.depth >= depth - 3 && e.bound != BOUND_UPPER && tt_score.abs() < MATE_BOUND {
                     let s_beta = tt_score - depth * p(P::SeMul16) / 16;
                     self.stack[ply].excluded = mv;
@@ -1499,6 +1531,9 @@ impl Searcher {
 
     fn qsearch(&mut self, b: &Board, mut alpha: i32, beta: i32, ply: usize) -> i32 {
         self.pv_len[ply] = ply;
+        if p(P::FixMate50) > 0 && b.halfmove >= 100 && b.in_check() && b.legal_moves().is_empty() {
+            return -MATE + ply as i32;
+        }
         // Keep the legacy qsearch exactly when off. Enabled draw detection, like
         // negamax's, precedes TT lookup and does not store the terminal score.
         if p(P::SprContempt) > 0 && ply > 0
@@ -1522,7 +1557,7 @@ impl Searcher {
 
         let tt_entry = self.tt.probe(b.hash);
         if let Some(e) = tt_entry {
-            let s = score_from_tt(e.score, ply);
+            let s = score_from_tt(e.score, ply, b.halfmove);
             if !pv_node
                 && (e.bound == BOUND_EXACT
                     || (e.bound == BOUND_LOWER && s >= beta)
@@ -1549,7 +1584,7 @@ impl Searcher {
             // Sprint 13: a TT score is a better stand-pat estimate than the static eval when its bound allows it.
             if p(P::SprQsTtEval) > 0 {
                 if let Some(e) = tt_entry {
-                    let s = score_from_tt(e.score, ply);
+                    let s = score_from_tt(e.score, ply, b.halfmove);
                     if s.abs() < MATE_BOUND
                         && (e.bound == BOUND_EXACT
                             || (e.bound == BOUND_LOWER && s > best)
@@ -1662,3 +1697,7 @@ mod sprint12_ordering_tests {
         assert_eq!(&base[..2], &[20, 10]);
     }
 }
+
+#[cfg(test)]
+#[path = "rc_tests.rs"]
+mod rc_tests;

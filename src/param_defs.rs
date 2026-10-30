@@ -1,5 +1,9 @@
 // Shared by the engine and build.rs; keep defaults and bounds in one place.
 params! {
+    // Independent release-candidate correctness controls; preserve legacy search at zero.
+    FixMate50 = 0, 0, 1;
+    FixTbPly = 0, 0, 1;
+    FixR50Tt = 0, 0, 1;
     AspDelta = 20, 8, 50;
     RfpMargin = 78, 40, 150;
     RfpDepth = 8, 4, 12;
