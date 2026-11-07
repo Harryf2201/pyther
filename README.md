@@ -19,6 +19,11 @@ cargo build --release
 ./target/release/pawnstorm perft    # move generation correctness test
 ```
 
+## Release testing
+
+Release candidates receive independent self-play confirmation and a paired check against
+four locked external engines. See [the release-check process](docs/external-release-check.md).
+
 ## Training data
 
 `pawnstorm datagen <threads> <positions> <soft-nodes> <out-dir> [seconds] [seed]` plays fast

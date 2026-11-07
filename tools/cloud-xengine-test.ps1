@@ -18,7 +18,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\paths.ps1"
 Set-Location $RepoRoot
-function Invoke-Gh([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments) {
+function Invoke-Gh([string[]]$Arguments) {
     $result = & gh @Arguments
     if ($LASTEXITCODE -ne 0) { throw 'GitHub command failed. Queue must stop for review.' }
     return $result
@@ -35,7 +35,7 @@ if (-not $id) {
     $poolFile = Join-Path $RepoRoot '.github\xengine\pool-v1.json'
     $locked = Get-Content $poolFile -Raw | ConvertFrom-Json
     if (@($locked.engines | Where-Object { -not $_.binary_sha256 }).Count) { throw 'Pin the complete pool lock before dispatching matches' }
-    $active = Invoke-Gh @('run','list','--workflow','xengine-match.yml','-L','30','--json','status') | ConvertFrom-Json
+    $active = Invoke-Gh -Arguments @('run','list','--workflow','xengine-match.yml','-L','30','--json','status') | ConvertFrom-Json
     if (@($active | Where-Object { $_.status -ne 'completed' }).Count) { throw 'An xengine run is already active' }
     $request = [ordered]@{ name=$Name; tc=$TC; jobs=$Jobs; blocks=$BlocksPerOpponentPerShard; pool=$Pool; pool_hash=(Hash $poolFile); seed=$Seed; notes=$Notes }
     foreach ($pair in @(@('candidate',$Dev,$DevRef),@('release',$Base,$BaseRef))) {
@@ -43,7 +43,7 @@ if (-not $id) {
         $sha = (& git rev-parse --verify "$ref^{commit}").Trim()
         if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[a-f0-9]{40}$') { throw 'Cannot resolve code commit' }
         # Code must already be published. This driver never pushes unrelated refs.
-        $null = Invoke-Gh @('api',"repos/{owner}/{repo}/commits/$sha",'--jq','.sha')
+        $null = Invoke-Gh -Arguments @('api',"repos/{owner}/{repo}/commits/$sha",'--jq','.sha')
         $entry = [ordered]@{ spec=$spec; ref=$sha }
         foreach ($kind in 'nnue','options','ref') {
             $asset = "$key-$role.$kind"
@@ -52,19 +52,19 @@ if (-not $id) {
             else { Copy-Item -LiteralPath "$LabRoot\engines\$spec.$kind" -Destination $path }
             $field = if ($kind -eq 'ref') { 'ref_file' } else { $kind }
             $entry[$field] = @{ asset=$asset; sha256=(Hash $path) }
-            $null = Invoke-Gh @('release','upload','testkit',$path)
+            $null = Invoke-Gh -Arguments @('release','upload','testkit',$path)
         }
         $request[$role] = $entry
     }
-    $null = Invoke-Gh @('release','download','testkit','--pattern',$Book,'--dir',$tmp)
+    $null = Invoke-Gh -Arguments @('release','download','testkit','--pattern',$Book,'--dir',$tmp)
     $request.book = @{ asset=$Book; sha256=(Hash (Join-Path $tmp $Book)) }
     $requestAsset = "$key.json"
     [IO.File]::WriteAllText((Join-Path $tmp $requestAsset),($request | ConvertTo-Json -Depth 10))
-    $null = Invoke-Gh @('release','upload','testkit',(Join-Path $tmp $requestAsset))
-    $null = Invoke-Gh @('workflow','run','xengine-match.yml','-f','mode=match','-f',"request=$requestAsset",'-f',"label=$key")
+    $null = Invoke-Gh -Arguments @('release','upload','testkit',(Join-Path $tmp $requestAsset))
+    $null = Invoke-Gh -Arguments @('workflow','run','xengine-match.yml','-f','mode=match','-f',"request=$requestAsset",'-f',"label=$key")
     for ($i=0; $i -lt 30 -and -not $id; $i++) {
         Start-Sleep 10
-        $runs = Invoke-Gh @('run','list','--workflow','xengine-match.yml','-L','20','--json','databaseId,displayTitle') | ConvertFrom-Json
+        $runs = Invoke-Gh -Arguments @('run','list','--workflow','xengine-match.yml','-L','20','--json','databaseId,displayTitle') | ConvertFrom-Json
         $id = ($runs | Where-Object { $_.displayTitle -eq "xengine match $key" } | Select-Object -First 1).databaseId
     }
     if (-not $id) { throw "Could not identify dispatch $key. Stop and reattach manually." }
@@ -81,7 +81,7 @@ $meta = @("name=$Name",'type=xengine',"main=$Dev","base=$Base","tc=$TC", "total=
 if (-not (Test-Path "$runDir\meta.txt")) { $meta | Set-Content "$runDir\meta.txt" -Encoding utf8 }
 $failed = $false
 do {
-    $rv = Invoke-Gh @('run','view',"$id",'--json','status,conclusion,workflowName') | ConvertFrom-Json
+    $rv = Invoke-Gh -Arguments @('run','view',"$id",'--json','status,conclusion,workflowName') | ConvertFrom-Json
     if ($rv.workflowName -ne 'xengine-match') { throw 'Run ID belongs to another workflow' }
     "$(Get-Date -Format o) cloud run $id $($rv.status)" | Add-Content "$runDir\progress.log"
     if ($rv.status -ne 'completed') { Start-Sleep 60 }
@@ -89,7 +89,7 @@ do {
 # Always retain failure artifacts. Download only game shards, never engine binaries to this PC.
 $artifactDir = Join-Path $tmp 'shards'
 New-Item -ItemType Directory -Force $artifactDir | Out-Null
-try { $null = Invoke-Gh @('run','download',"$id",'--pattern','xengine-shard-*','--dir',$artifactDir) }
+try { $null = Invoke-Gh -Arguments @('run','download',"$id",'--pattern','xengine-shard-*','--dir',$artifactDir) }
 catch { $failed = $true }
 if ($rv.conclusion -ne 'success' -or $failed) {
     @{ type='xengine'; valid=$false; decision='fail'; run_id=$id; error="GitHub conclusion $($rv.conclusion), artifacts downloaded=$(-not $failed)" } |

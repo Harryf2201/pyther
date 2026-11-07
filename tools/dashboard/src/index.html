@@ -290,7 +290,7 @@ const big = n => n >= 1e9 ? (n / 1e9).toFixed(2) + 'B' : n >= 1e6 ? (n / 1e6).to
 const pct = (w, d, n) => n ? 100 * (w + d / 2) / n : null;
 
 // ---- UI state (remembered between visits) ----
-const TABS = [['overview', 'Overview', '🏠'], ['versions', 'Versions', '📈'], ['championship', 'Championship', '🏁'], ['tournaments', 'Tournaments', '⚔️'], ['achievements', 'Achievements', '🏆'], ['data', 'Data', '🧬'], ['lab', 'Lab', '🔧']];
+const TABS = [['overview', 'Home', '🏠'], ['versions', 'Versions', '📈'], ['championship', 'Championship', '🏁'], ['tournaments', 'Tests', '⚔️'], ['achievements', 'Achievements', '🏆'], ['data', 'Data', '🧬'], ['lab', 'Lab', '🔧']];
 const ui = { state: {}, sort: 'new', group: 'cat' };
 try { const s = JSON.parse(localStorage.getItem('pawn-ui') || '{}'); Object.assign(ui, s); } catch (e) {}
 const saveUi = () => { try { localStorage.setItem('pawn-ui', JSON.stringify({ state: ui.state, sort: ui.sort, group: ui.group })); } catch (e) {} };
@@ -706,6 +706,9 @@ function renderGoals() {
 }
 
 function renderOverview(m) {
+  return '<h2>Latest results</h2>' + xengineSection(['finished','failed']) + renderSelfplayOverview(m);
+}
+function renderSelfplayOverview(m) {
   return renderHero(m) + renderExperiments(m) + renderNow() + renderLichess() + renderGoals();
 }
 
@@ -1148,6 +1151,9 @@ function renderCompare() {
 }
 
 function renderTournaments() {
+  return '<h2>External checks running and waiting</h2>' + xengineSection(['running','waiting']) + '<h2>Finished external checks</h2>' + xengineSection(['finished','failed']) + renderSelfplayTournaments();
+}
+function renderSelfplayTournaments() {
   const live = runs.filter(r => r.status === 'running');
   const done = runs.filter(r => r.status !== 'running');
   let h = renderCompare() + `<h2>In progress (${live.length})</h2>` +
@@ -1783,6 +1789,25 @@ function render() {
 }
 
 let pollN = 0;
+
+// Paired external results have their own estimator and release decision.
+let xengineRuns = [];
+function xengineCard(run) {
+  const result = run.result, ci = result?.ci95;
+  const labels = {'non-regression':'Not worse', improvement:'Better', inconclusive:'Inconclusive', fail:'Fail'};
+  const verdict = result ? labels[result.decision] || 'Inconclusive' : run.state;
+  const effect = result?.pool_elo;
+  const number = effect == null ? '' : (effect >= 0 ? '+' : '') + effect.toFixed(1) + (ci ? ' [' + ci.map(x => x.toFixed(1)).join(', ') + ']' : '');
+  const opponents = result?.per_opponent || [];
+  const title = short(run.main) + ' vs ' + short(run.base) + ' against ' + (opponents.length || 4) + ' other engines';
+  const rows = opponents.map(p => '<tr><td>' + esc(p.opponent) + '</td><td>' + (100*p.candidate_score).toFixed(1) + '%</td><td>' + (100*p.release_score).toFixed(1) + '%</td><td>' + (p.pool_elo == null ? 'undefined' : p.pool_elo.toFixed(1)) + '</td></tr>').join('');
+  const termination = Object.entries(result?.termination_counts || {}).map(([k,v]) => esc(k) + ' ' + v).join(' | ');
+  return '<article class="panel run"><div class="now-t">' + esc(title) + '</div><div class="result-number">' + esc(number) + ' <span class="verdict">' + esc(verdict) + '</span></div><div class="sub">' + esc(run.name) + ' | ' + (result?.games || 0) + ' / ' + run.total + ' games</div>' + (result ? '<details><summary>External check details</summary><p>Pool-Elo difference with a paired 95% interval. Non-regression margin -10.</p><div class="tbl"><table><tr><th>Opponent</th><th>Candidate score</th><th>Release score</th><th>Difference</th></tr>' + rows + '</table></div><p>' + termination + '</p><p>' + esc(result.error || '') + '</p><p>Runner sensitivity interval ' + esc(JSON.stringify(result.runner_ci95)) + '</p></details>' : '') + '</article>';
+}
+function xengineSection(states) {
+  return xengineRuns.filter(r => states.includes(r.state)).sort((a,b) => b.created-a.created).map(xengineCard).join('');
+}
+
 async function poll() {
   const j = async u => { try { return await (await fetch(u)).json(); } catch (e) { return undefined; } };
   const n = pollN++;
@@ -1791,6 +1816,7 @@ async function poll() {
       j('/api/health'), j('/api/lab'), j('/api/training'), j('/api/schedule'), j('/api/datagen'), j('/api/runs'),
       j('/api/ratings'), n % 5 === 0 || !ach ? j('/api/achievements') : Promise.resolve(undefined), j('/api/versions'), j('/api/prepare'), j('/api/spsa'), j('/api/lichess'), j('/api/lichess/live'),
     ]);
+    xengineRuns = await j('/api/xengine') || [];
     if (r === undefined) throw new Error('unreachable');
     health = h ?? null; lab = l ?? null; schedule = s ?? null;
     trains = (t ?? []).sort((x, y) => y.started - x.started);

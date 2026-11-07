@@ -666,7 +666,7 @@ fn matchups(runs: &HashMap<String, RunState>, alias: &HashMap<String, String>, s
     let mut pairs: BTreeMap<(String, String), [u32; 3]> = BTreeMap::new();
     let mut anchors: BTreeMap<String, f64> = BTreeMap::new();
     let mut recent: BTreeMap<String, u64> = BTreeMap::new();
-    for r in runs.values().filter(|r| r.meta.created >= since) {
+    for r in runs.values().filter(|r| r.meta.kind != "xengine" && r.meta.created >= since) {
         for (n, a) in &r.meta.anchors {
             anchors.insert(show(n), *a);
         }
@@ -749,7 +749,7 @@ fn global_ratings(runs: &HashMap<String, RunState>, alias: &HashMap<String, Stri
     };
     // pair (i, j) with i < j -> [wins for i, draws, wins for j]
     let mut pairs: HashMap<(usize, usize), [f64; 3]> = HashMap::new();
-    for r in runs.values() {
+    for r in runs.values().filter(|r| r.meta.kind != "xengine") {
         let running = status(r) == "running";
         // Only the engine under test counts as live, not the opponents it is playing.
         let main_key = canon_key(alias, &r.meta.main);
@@ -878,6 +878,7 @@ fn compute_ratings(runs: &mut HashMap<String, RunState>, ids_by_age: &[String], 
     let mut known: HashMap<String, (f64, f64)> = HashMap::new();
     for id in ids_by_age {
         let r = runs.get_mut(id).unwrap();
+        if r.meta.kind == "xengine" { r.rating = None; continue; }
         let (_, per) = summarize(r);
         let mut rated = Vec::new();
         let mut anchor_err2 = 0.0;
@@ -1365,6 +1366,37 @@ struct App {
     /// When the runs were last refreshed, and the run ids then (newest first): page loads ask for several
     /// endpoints at once, and one refresh every few seconds is plenty.
     refreshed: Mutex<Option<(std::time::Instant, Vec<String>)>>,
+}
+
+
+/// External-pool results are displayed separately and excluded from rating inputs.
+fn xengine_runs(root: &Path) -> String {
+    let mut items = Vec::new();
+    let mut titles = std::collections::HashSet::new();
+    for entry in std::fs::read_dir(root.join("runs")).into_iter().flatten().flatten() {
+        let p = entry.path();
+        let Some(meta) = read_meta(&p).filter(|m| m.kind == "xengine") else { continue };
+        let result = std::fs::read_to_string(p.join("results.json")).unwrap_or_else(|_| "null".into());
+        let state = if result.trim() == "null" { "running" } else { "finished" };
+        let text = std::fs::read_to_string(p.join("meta.txt")).unwrap_or_default();
+        let base = text.lines().find_map(|l| l.strip_prefix("base=")).unwrap_or("");
+        titles.insert(meta.name.clone());
+        items.push(format!("{{\"id\":{},\"name\":{},\"main\":{},\"base\":{},\"state\":{},\"total\":{},\"created\":{},\"result\":{}}}",
+            js(&entry.file_name().to_string_lossy()), js(&meta.name), js(&meta.main), js(base), js(state), meta.total, meta.created, result.trim_start_matches('\u{feff}').trim()));
+    }
+    for entry in std::fs::read_dir(root.join("coord/cloud-queue")).into_iter().flatten().flatten() {
+        let p = entry.path();
+        let state = match p.extension().and_then(|e| e.to_str()) {
+            Some("xtest") => "waiting", Some("running") => "running", Some("failed") => "failed", _ => continue,
+        };
+        let text = std::fs::read_to_string(&p).unwrap_or_default();
+        let f: Vec<_> = text.trim_start_matches('\u{feff}').lines().next().unwrap_or("").split('|').collect();
+        if f.len() != 12 || f[8].trim() != "xengine-pool-v1" || titles.contains(f[0].trim()) { continue; }
+        let total = f[6].trim().parse::<u64>().unwrap_or(0).saturating_mul(f[7].trim().parse().unwrap_or(0)).saturating_mul(16);
+        items.push(format!("{{\"id\":{},\"name\":{},\"main\":{},\"base\":{},\"state\":{},\"total\":{},\"created\":{},\"result\":null}}",
+            js(&entry.file_name().to_string_lossy()), js(f[0].trim()), js(f[1].trim()), js(f[3].trim()), js(state), total, mtime(&p)));
+    }
+    format!("[{}]", items.join(","))
 }
 
 impl App {
@@ -2006,10 +2038,13 @@ impl App {
             let page = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/index.html")).unwrap_or_else(|_| INDEX.to_string());
             return ("200 OK", page, "text/html; charset=utf-8");
         }
+        if path == "/api/xengine" {
+            return ("200 OK", xengine_runs(&self.root), "application/json");
+        }
         if path == "/api/runs" {
             let ids = self.refresh_all();
             let runs = self.runs.lock().unwrap();
-            let items: Vec<String> = ids.iter().map(|id| run_brief(id, &runs[id])).collect();
+            let items: Vec<String> = ids.iter().filter(|id| runs[*id].meta.kind != "xengine").map(|id| run_brief(id, &runs[id])).collect();
             return ("200 OK", format!("[{}]", items.join(",")), "application/json");
         }
         if path == "/api/ratings" {
@@ -2217,7 +2252,7 @@ fn main() {
         let exe = std::env::current_exe().unwrap_or_default();
         exe.ancestors().nth(4).map(|p| p.join("testing")).unwrap_or_else(|| PathBuf::from("testing"))
     });
-    let port: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8000);
+    let port: u16 = args.iter().position(|s| s == "--port").and_then(|i| args.get(i + 1)).or_else(|| args.get(2)).and_then(|s| s.parse().ok()).unwrap_or(8000);
     let _ = std::fs::create_dir_all(root.join("runs"));
     // The catalog sits at the repo root; the exe lives in <repo>/target/release/.
     let mut version_files: Vec<PathBuf> = std::env::current_exe()
@@ -2238,6 +2273,21 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_pool_never_enters_ratings() {
+        let run = RunState {
+            meta: Meta { kind: "xengine".into(), main: "candidate".into(), anchors: vec![("reference".into(), 3500.0)], ..Default::default() },
+            games: vec![Game { white: "candidate".into(), black: "reference".into(), result: "1-0".into(), ..Default::default() }],
+            finished: true,
+            ..Default::default()
+        };
+        let mut runs = HashMap::from([("external".into(), run)]);
+        let alias = HashMap::new();
+        assert!(global_ratings(&runs, &alias).is_empty());
+        compute_ratings(&mut runs, &["external".into()], &alias);
+        assert!(runs["external"].rating.is_none());
+    }
 
     #[test]
     fn pgn_end_time() {
