@@ -94,6 +94,7 @@ def main():
                 raise ValueError('upstream Carp checksum mismatch')
         if engine.get('net'):
             acquire(engine['net'], source / engine['net_path'], args.lock)
+            shutil.copy2(source / engine['net_path'], out / (name + '-network'))
         if engine.get('commands'):
             for command in engine['commands']:
                 run(command, cwd=source)

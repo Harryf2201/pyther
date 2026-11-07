@@ -13,50 +13,64 @@
     "runner": "ubuntu-24.04",
     "compiler": "g++-14",
     "rust": "1.90.0",
-    "sha256": null
+    "sha256": "6fb08567a23031fab130ce7412b2c6448c84d53e6bd857858ed6748480aa769a",
+    "identity": "g++-14 (Ubuntu 14.2.0-4ubuntu2~24.04.1) 14.2.0\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n\nGNU ld (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) a later version.\nThis program has absolutely no warranty.\n\nGNU Make 4.3\nBuilt for x86_64-pc-linux-gnu\nCopyright (C) 1988-2020 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\n916ef3c03c2d024857af2e084d3648204033b9c79e0e62575974f567f99adc84e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b"
   },
   "engines": [
     {
       "id": "Carp-3.0.1",
       "source": {
         "url": "https://github.com/dede1751/carp/archive/2f092e0d68bd4dbafae3a1353b2643b1e6bd77dc.tar.gz",
-        "sha256": null,
+        "sha256": "36934a5f3dfac0dda622bad7fab26b83ac12cbc00dbeef9c2d6fde7f6d78a413",
         "commit": "2f092e0d68bd4dbafae3a1353b2643b1e6bd77dc"
       },
       "licence": "GPL-3.0",
       "licence_path": "LICENSE",
-      "binary_sha256": null,
-      "uci": null,
+      "binary_sha256": "5060bda0458dd63ebdd38ee12eb411a37c2863c4193876982be2ce07cd6b0038",
+      "uci": [
+        "id name Carp 3.0.1",
+        "option name Hash type spin default 16 min 1 max 1048576 ",
+        "option name Threads type spin default 1 min 1 max 512"
+      ],
       "asset": {
         "url": "https://github.com/dede1751/carp/releases/download/v3.0.1/carp-v3.0.1-linux-x86_64-V3",
-        "sha256": null
+        "sha256": "5060bda0458dd63ebdd38ee12eb411a37c2863c4193876982be2ce07cd6b0038"
       },
       "checksums": {
         "url": "https://github.com/dede1751/carp/releases/download/v3.0.1/checksums.txt",
-        "sha256": null
+        "sha256": "81183334f2824958c1f1b44387be53672c53611357fe2a4f030377a030cc2ab1"
       }
     },
     {
       "id": "Koivisto-9.0",
       "source": {
         "url": "https://github.com/Luecx/Koivisto/archive/2895237d7a4ff267752fb19852ce9868bdccb753.tar.gz",
-        "sha256": null,
+        "sha256": "1ae11401c263f306567735c92bb61b16759c2c7d8b8c8e9c2aa2a7d61b013014",
         "commit": "2895237d7a4ff267752fb19852ce9868bdccb753"
       },
       "licence": "GPL-3.0",
       "licence_path": "LICENSE.md",
-      "binary_sha256": null,
-      "uci": null,
+      "binary_sha256": "1c28f937c0dae37e7f3834f8d0ce318d77da33bf2d392b23597c4b4b67e99b36",
+      "uci": [
+        "id name Koivisto 9.0",
+        "option name Hash type spin default 16 min 1 max 65536",
+        "option name Threads type spin default 1 min 1 max 256",
+        "option name OwnBook type check default false",
+        "option name BookPath type string",
+        "option name SyzygyPath type string default",
+        "option name MoveOverhead type spin default 0 min 0 max 10000",
+        "option name MoveOverheadType type combo default PerMove var PerMove var PerGame"
+      ],
       "asset": {
         "url": "https://github.com/Luecx/Koivisto/releases/download/v9.0/Koivisto_9.0-linux-avx2-pgo",
-        "sha256": null
+        "sha256": "1c28f937c0dae37e7f3834f8d0ce318d77da33bf2d392b23597c4b4b67e99b36"
       }
     },
     {
       "id": "RubiChess-20240817",
       "source": {
         "url": "https://github.com/Matthies/RubiChess/archive/3e56589fea1ab3a9e06796290cbd1e9f805bfc1b.tar.gz",
-        "sha256": null,
+        "sha256": "b4940e2f58f48bc32211d7b749e050d787d07763003f9c8c9311aef108ace5d9",
         "commit": "3e56589fea1ab3a9e06796290cbd1e9f805bfc1b"
       },
       "licence": "GPL-3.0",
@@ -65,7 +79,7 @@
       "uci": null,
       "net": {
         "url": "https://raw.githubusercontent.com/Matthies/NN/bc471a62eb8c0f21b71f084a2ee7865e829f3f4b/nn-bc638d5ec9-20240730.nnue",
-        "sha256": null,
+        "sha256": "bc638d5ec9f15e5de7a4d1c32f7208e4e7cf889e566d225309915ae38a6542b5",
         "licence": "GPL-3.0, distributed with RubiChess"
       },
       "net_path": "src/nn-bc638d5ec9-20240730.nnue",
@@ -79,7 +93,9 @@
           "CXX=g++-14",
           "MYCC=gcc-14",
           "EVALFILE=default",
-          "EXE=RubiChess"
+          "EXE=RubiChess",
+          "GITVER=20240817",
+          "GITID=3e5658"
         ]
       ],
       "output": "src/RubiChess"
@@ -88,13 +104,18 @@
       "id": "Alexandria-9.0.0",
       "source": {
         "url": "https://github.com/PGG106/Alexandria/archive/f65f76c4e25e03602bf7512b726dace67c01a07d.tar.gz",
-        "sha256": null,
+        "sha256": "fba7006188b7fe13cb22242ff802d3983f382c97e735e1b2a29fe8deb1e7687c",
         "commit": "f65f76c4e25e03602bf7512b726dace67c01a07d"
       },
       "licence": "GPL-3.0",
       "licence_path": "LICENSE.md",
-      "binary_sha256": null,
-      "uci": null,
+      "binary_sha256": "88d734bc351b9b6edc0dce9aea6d6122092932e3bc16fae1b2b31978aff51d12",
+      "uci": [
+        "id name Alexandria-9.0.0",
+        "option name Hash type spin default 16 min 1 max 262144 ",
+        "option name Threads type spin default 1 min 1 max 256 ",
+        "option name Minimal type check default false "
+      ],
       "net": {
         "url": "https://github.com/PGG106/Alexandria-networks/releases/download/net09/nn.net",
         "sha256": "b9a20ec5481b47d18151b42e35c46564e2b0b3d0582403aadacbdb529fc478f2",
@@ -115,7 +136,7 @@
   "fastchess": {
     "url": "https://github.com/Disservin/fastchess/releases/download/v1.8.2-alpha/fastchess-linux-x86-64.tar",
     "commit": "f618e34540f94f4719ad3817950618dabe441318",
-    "sha256": null,
-    "binary_sha256": null
+    "sha256": "1003f920bebe841acdab5e6d7871e93171a4586857b3ec91c21ef5777f26ff96",
+    "binary_sha256": "3d0a8f3c8b837a96366ac838f3ddf6fe87b813abb4ad2852284c0ce409132566"
   }
 }

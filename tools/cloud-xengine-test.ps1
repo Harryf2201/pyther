@@ -18,7 +18,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\paths.ps1"
 Set-Location $RepoRoot
-function Invoke-Gh([string[]]$Arguments) {
+function Invoke-Gh([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments) {
     $result = & gh @Arguments
     if ($LASTEXITCODE -ne 0) { throw 'GitHub command failed. Queue must stop for review.' }
     return $result
