@@ -50,6 +50,7 @@ if (-not $id) {
     $active = Invoke-Gh -Arguments @('run','list','--workflow','xengine-match.yml','-L','30','--json','status') | ConvertFrom-Json
     if (@($active | Where-Object { $_.status -ne 'completed' }).Count) { throw 'An xengine run is already active' }
     $request = [ordered]@{ name=$Name; tc=$TC; jobs=$Jobs; blocks=$BlocksPerOpponentPerShard; pool=$Pool; pool_hash=(Hash $poolFile); seed=$Seed; notes=$Notes }
+    $request.build = @{ rust=$locked.toolchain.rust; rustflags='-C target-cpu=x86-64-v3' }
     $usedStarts = New-Object 'System.Collections.Generic.HashSet[string]'
     foreach ($previous in Get-ChildItem "$LabRoot\runs\*\schedule.json" -ErrorAction SilentlyContinue) {
         $prior = Get-Content $previous.FullName -Raw | ConvertFrom-Json

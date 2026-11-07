@@ -29,6 +29,8 @@ jobs:
       shards: ${{ steps.schedule.outputs.shards }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
       - name: Compiler
         run: |
           sudo apt-get update -qq
@@ -71,6 +73,7 @@ jobs:
           path: |
             pool/
             kit/
+            builds/
           retention-days: 3
           if-no-files-found: error
 
@@ -86,13 +89,9 @@ jobs:
         shard: ${{ fromJson(needs.prep.outputs.shards) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: xengine-prepared
-      - name: Rust toolchain
-        run: rustup toolchain install 1.99.0 --profile minimal
       - name: Paired blocks
         env:
           SHARD: ${{ matrix.shard }}

@@ -73,6 +73,24 @@ def prepare(asset):
     fens = [fen for fen in fens if ' '.join(fen.split()[:4]) not in excluded]
     random.Random(request['seed']).shuffle(fens)
     pool = read('.github/xengine/pool-v1.json')
+    if request['build'] != {'rust': pool['toolchain']['rust'], 'rustflags': '-C target-cpu=x86-64-v3'}:
+        raise ValueError('unapproved Pawnstorm build configuration')
+    builds = Path('builds')
+    builds.mkdir()
+    built = {}
+    binary_hashes = {}
+    for role in ('candidate', 'release'):
+        ref = request[role]['ref']
+        if ref not in built:
+            work = Path('build-' + role)
+            subprocess.run(['git', 'worktree', 'add', '--detach', str(work), ref], check=True)
+            env = dict(os.environ, RUSTFLAGS=request['build']['rustflags'])
+            env.pop('CARGO_ENCODED_RUSTFLAGS', None)
+            subprocess.run(['cargo', '+' + request['build']['rust'], 'build', '--locked', '--release', '-p', 'pawnstorm'],
+                           cwd=work, env=env, check=True)
+            built[ref] = work / 'target/release/pawnstorm'
+        shutil.copy2(built[ref], builds / role)
+        binary_hashes[role] = A.digest(builds / role)
     count = request['jobs'] * request['blocks'] * len(pool['engines'])
     if count > len(fens):
         raise ValueError('not enough unique normalized openings')
@@ -83,7 +101,9 @@ def prepare(asset):
                 i = len(blocks)
                 blocks.append(dict(id=f'b{i:06}', fen=fens[i], opponent=engine['id'], shard=shard))
     schedule = dict(inputs=request, pool_hash=A.digest('.github/xengine/pool-v1.json'),
-                    options_hash=A.digest(kit / asset), blocks=blocks)
+                    options_hash=A.digest(kit / asset), pawnstorm_binaries=binary_hashes,
+                    rust_identity=subprocess.check_output(['rustc', '+' + request['build']['rust'], '-vV'], text=True),
+                    blocks=blocks)
     A.write_json(kit / 'schedule.json', schedule)
     with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
         out.write('shards=' + json.dumps(list(range(request['jobs']))) + '\n')
@@ -133,11 +153,10 @@ def play(shard):
     commands = {}
     for role in ('candidate', 'release'):
         spec = inputs[role]
-        work = Path('build-' + role)
-        subprocess.run(['git', 'worktree', 'add', '--detach', str(work), spec['ref']], check=True)
-        subprocess.run(['cargo', '+' + pool['toolchain']['rust'], 'build', '--locked', '--release', '-p', 'pawnstorm'], cwd=work, check=True)
-        exe = Path('eng-' + role)
-        shutil.copy2(work / 'target/release/pawnstorm', exe)
+        exe = Path('builds', role)
+        exe.chmod(0o755)
+        if A.digest(exe) != schedule['pawnstorm_binaries'][role]:
+            raise ValueError('Pawnstorm binary differs from prepared schedule')
         wanted = {}
         for line in Path('kit', spec['options']['asset']).read_text().splitlines():
             if line.strip():
