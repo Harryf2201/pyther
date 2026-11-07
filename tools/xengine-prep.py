@@ -66,6 +66,11 @@ def main():
     analysis.write_json(out / 'observed-lock.json', manifest)
     if (out / 'verified.json').exists() and not args.lock:
         for engine in manifest['engines']:
+            check(analysis.digest(out / (engine['id'] + '-source.tar.gz')),
+                  engine['source']['sha256'], engine['id'] + ' cached source', False)
+            if engine.get('net'):
+                check(analysis.digest(out / (engine['id'] + '-network')),
+                      engine['net']['sha256'], engine['id'] + ' cached network', False)
             check(analysis.digest(out / engine['id']), engine['binary_sha256'], engine['id'], False)
             check(probe(out / engine['id']), engine['uci'], engine['id'] + ' UCI', False)
         check(analysis.digest(out / 'fc'), manifest['fastchess']['binary_sha256'], 'fastchess', False)
