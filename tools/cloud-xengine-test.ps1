@@ -38,6 +38,14 @@ if (-not $id) {
     $active = Invoke-Gh -Arguments @('run','list','--workflow','xengine-match.yml','-L','30','--json','status') | ConvertFrom-Json
     if (@($active | Where-Object { $_.status -ne 'completed' }).Count) { throw 'An xengine run is already active' }
     $request = [ordered]@{ name=$Name; tc=$TC; jobs=$Jobs; blocks=$BlocksPerOpponentPerShard; pool=$Pool; pool_hash=(Hash $poolFile); seed=$Seed; notes=$Notes }
+    $usedStarts = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($previous in Get-ChildItem "$LabRoot\runs\*\schedule.json" -ErrorAction SilentlyContinue) {
+        $prior = Get-Content $previous.FullName -Raw | ConvertFrom-Json
+        foreach ($block in $prior.blocks) {
+            [void]$usedStarts.Add((($block.fen -split '\s+')[0..3] -join ' '))
+        }
+    }
+    $request.excluded_fens = @($usedStarts | Sort-Object)
     foreach ($pair in @(@('candidate',$Dev,$DevRef),@('release',$Base,$BaseRef))) {
         $role,$spec,$ref = $pair
         $sha = (& git rev-parse --verify "$ref^{commit}").Trim()
@@ -87,7 +95,7 @@ do {
     if ($rv.status -ne 'completed') { Start-Sleep 60 }
 } while ($rv.status -ne 'completed')
 # Always retain failure artifacts. Download only game shards, never engine binaries to this PC.
-$artifactDir = Join-Path $tmp 'shards'
+$artifactDir = Join-Path $runDir 'artifacts'
 New-Item -ItemType Directory -Force $artifactDir | Out-Null
 try { $null = Invoke-Gh -Arguments @('run','download',"$id",'--pattern','xengine-shard-*','--dir',$artifactDir) }
 catch { $failed = $true }
@@ -95,13 +103,18 @@ if ($rv.conclusion -ne 'success' -or $failed) {
     @{ type='xengine'; valid=$false; decision='fail'; run_id=$id; error="GitHub conclusion $($rv.conclusion), artifacts downloaded=$(-not $failed)" } |
         ConvertTo-Json | Set-Content "$runDir\results.json" -Encoding utf8
     'Failed external check' | Set-Content "$runDir\output.txt"
-    [IO.File]::WriteAllText("$runDir\games.pgn", '')
+    $partial = Get-ChildItem $artifactDir -Recurse -Filter games.pgn -ErrorAction SilentlyContinue
+    if (-not $partial) { $partial = Get-ChildItem $artifactDir -Recurse -Filter combined.pgn -ErrorAction SilentlyContinue }
+    $text = ($partial | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join "`n"
+    [IO.File]::WriteAllText("$runDir\games.pgn", $text)
     throw "cloud run $id failed. Artifacts retained for diagnosis. Stop dispatching."
 }
 $python = if (Get-Command py -ErrorAction SilentlyContinue) { 'py' } else { 'python3' }
 & $python "$PSScriptRoot\xengine-analysis.py" --artifacts $artifactDir --output $runDir
 if ($LASTEXITCODE -ne 0) { throw 'External analysis rejected the run' }
 $result = Get-Content "$runDir\results.json" -Raw | ConvertFrom-Json
+$schedule = Get-ChildItem $artifactDir -Recurse -Filter schedule.json | Select-Object -First 1
+Copy-Item -LiteralPath $schedule.FullName -Destination "$runDir\schedule.json"
 # Reattachment uses the archived request, never the new command line, for final provenance.
 $req = $result.inputs
 @("name=$($req.name)",'type=xengine',"main=$($req.candidate.spec)","base=$($req.release.spec)","tc=$($req.tc)",

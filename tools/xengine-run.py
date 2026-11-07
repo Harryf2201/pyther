@@ -69,6 +69,8 @@ def prepare(asset):
     for fen in fens:
         unique.setdefault(' '.join(fen.split()[:4]), fen)
     fens = list(unique.values())
+    excluded = set(request.get('excluded_fens', []))
+    fens = [fen for fen in fens if ' '.join(fen.split()[:4]) not in excluded]
     random.Random(request['seed']).shuffle(fens)
     pool = read('.github/xengine/pool-v1.json')
     count = request['jobs'] * request['blocks'] * len(pool['engines'])

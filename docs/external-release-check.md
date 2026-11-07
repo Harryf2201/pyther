@@ -17,6 +17,8 @@ key includes the complete lock and prep script, covering sources, nets, toolchai
 unique testkit assets. It dispatches, waits and saves `meta.txt`, `games.pgn` and
 `results.json` under the sibling testing lab's `runs` folder. Reattach with `-RunId` and
 the original identifying arguments. Final metadata comes from the archived request.
+Schedules, per-game records and diagnostic logs are retained alongside the result.
+Starts from locally archived successful external schedules are excluded from new requests.
 Example parameters for a 1,600-game calibration pilot are `-BlocksPerOpponentPerShard 25
 -Jobs 4 -Seed 2026110703`. Both full code refs must already be published.
 

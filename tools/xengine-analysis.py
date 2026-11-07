@@ -128,18 +128,29 @@ def analyse(schedule, records, seed=2026110701, replicates=10000):
         c, r = (statistics.mean(p[i] for p in pairs) for i in (0, 1))
         covariance = statistics.mean((a - c) * (b - r) for a, b in pairs)
         d = [a - b for a, b in pairs]
+        influence_variance = None
+        if 0 < c < 1 and 0 < r < 1 and len(pairs) > 1:
+            dc = 400 / (math.log(10) * c * (1-c))
+            dr = 400 / (math.log(10) * r * (1-r))
+            influence_variance = statistics.variance(dc*(a-c) - dr*(b-r) for a, b in pairs)
         rows.append(dict(opponent=k, blocks=len(pairs), candidate_score=c, release_score=r,
                          candidate_wdl=dict(wdl[(k, 'candidate')]), release_wdl=dict(wdl[(k, 'release')]),
                          pool_elo=effect({k: pairs}), ci95=interval(opponent_boot[k]), covariance=covariance,
+                         influence_variance=influence_variance,
                          difference_variance=statistics.variance(d) if len(d) > 1 else None))
     loo = {k: effect({o: v for o, v in cells.items() if o != k}) for k in cells} if len(cells) > 1 else {}
+    planning_games = None
+    if all(row['influence_variance'] is not None for row in rows):
+        planning_blocks = (1.96 + 0.84)**2 * statistics.mean(row['influence_variance'] for row in rows) / 10**2
+        planning_games = 4 * len(cells) * math.ceil(planning_blocks / len(cells))
     return dict(type='xengine', valid=True, games=len(records), blocks=len(blocks), pool_elo=estimate,
                 ci95=ci, decision=decision, margin=-10, bootstrap_seed=seed, bootstrap_replicates=replicates,
                 undefined_bootstrap=sum(v is None for v in boot),
                 runner_ci95=interval(cluster_boot), runner_clusters=len(runners),
                 raw_score_difference=statistics.mean(statistics.mean(a-b for a, b in v) for v in cells.values()),
                 per_opponent=rows, leave_one_opponent_out=loo, termination_counts=dict(terminations),
-                product_defects=len(defects), game_slot_seconds=duration)
+                product_defects=len(defects), game_slot_seconds=duration,
+                planning_games_10elo_80power=planning_games)
 
 
 def synthetic():
@@ -152,11 +163,15 @@ def synthetic():
             schedule['blocks'].append(b)
             for role in ('candidate', 'release'):
                 for colour in ('white', 'black'):
-                    records.append(dict(block=b['id'], role=role, colour=colour, result='1/2-1/2',
+                    score = (i % 3) / 2
+                    white_score = score if colour == 'white' else 1-score
+                    game_result = {0: '0-1', 0.5: '1/2-1/2', 1: '1-0'}[white_score]
+                    records.append(dict(block=b['id'], role=role, colour=colour, result=game_result,
                                         options_hash='synthetic', termination='normal', **{f:b[f] for f in ('opponent','shard','fen')}))
     result = analyse(schedule, records, replicates=1000)
     assert result['pool_elo'] == 0 and result['ci95'] == [0, 0]
     assert result['decision'] == 'non-regression'
+    assert all(row['covariance'] > 0 and row['difference_variance'] == 0 for row in result['per_opponent'])
     for bad in (records[:-1], records + records[:1]):
         try:
             analyse(schedule, bad, replicates=10)
@@ -167,6 +182,9 @@ def synthetic():
     changed = [dict(g, result='1-0' if g['colour'] == 'white' else '0-1')
                if g['role'] == 'candidate' else g for g in records]
     assert analyse(schedule, changed, replicates=10)['decision'] == 'inconclusive'
+    defective = [dict(g) for g in records]
+    defective[0]['termination'] = 'illegal'
+    assert analyse(schedule, defective, replicates=10)['decision'] == 'fail'
     print('Synthetic A/A = 0 [0, 0]; missing/duplicate games rejected; boundary scores inconclusive')
 
 
