@@ -82,11 +82,14 @@ if (-not $id) {
 }
 "cloud run $id started or reattached"
 # Run-ID destination makes reattachment idempotent and visible to the dashboard.
-$runDir = Join-Path $LabRoot "runs\$(Get-Date -Format yyyy-MM-dd)_xengine-$id"
+$existing = @(Get-ChildItem "$LabRoot\runs" -Directory -Filter "*_xengine-$id" -ErrorAction SilentlyContinue)
+if ($existing.Count -gt 1) { throw 'Multiple result directories for this run ID require review' }
+$runDir = if ($existing.Count) { $existing[0].FullName } else { Join-Path $LabRoot "runs\$(Get-Date -Format yyyy-MM-dd)_xengine-$id" }
 New-Item -ItemType Directory -Force $runDir | Out-Null
 $meta = @("name=$Name",'type=xengine',"main=$Dev","base=$Base","tc=$TC", "total=$($Jobs*$BlocksPerOpponentPerShard*16)",
     "created=$([DateTimeOffset]::Now.ToUnixTimeSeconds())", "run_id=$id", "pool=$Pool", "notes=$Notes")
 if (-not (Test-Path "$runDir\meta.txt")) { $meta | Set-Content "$runDir\meta.txt" -Encoding utf8 }
+$created = ((Get-Content "$runDir\meta.txt" | Where-Object { $_ -match '^created=' } | Select-Object -First 1) -replace '^created=', '')
 $failed = $false
 do {
     $rv = Invoke-Gh -Arguments @('run','view',"$id",'--json','status,conclusion,workflowName') | ConvertFrom-Json
@@ -118,7 +121,7 @@ Copy-Item -LiteralPath $schedule.FullName -Destination "$runDir\schedule.json"
 # Reattachment uses the archived request, never the new command line, for final provenance.
 $req = $result.inputs
 @("name=$($req.name)",'type=xengine',"main=$($req.candidate.spec)","base=$($req.release.spec)","tc=$($req.tc)",
-  "total=$($result.games)","actual=$($result.games)","created=$([DateTimeOffset]::Now.ToUnixTimeSeconds())",
+  "total=$($result.games)","actual=$($result.games)","created=$created",
   "run_id=$id","pool=$($req.pool)","pool_hash=$($result.pool_hash)","schedule_hash=$($result.schedule_hash)","notes=$($req.notes)") |
   Set-Content "$runDir\meta.txt" -Encoding utf8
 @("Elo: $($result.pool_elo); CI95: $($result.ci95 -join ', '); $($result.decision)","Games: $($result.games), complete paired external-pool games",'Finished match') |
