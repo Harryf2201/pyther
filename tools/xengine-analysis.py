@@ -26,7 +26,7 @@ def elo(p):
 def termination_category(reason):
     reason = reason.lower()
     for category in ('illegal', 'crash', 'disconnect', 'stall', 'time', 'stalemate',
-                     'mate', 'repetition', 'fifty', 'material'):
+                     'material', 'mate', 'repetition', 'fifty'):
         if category in reason:
             return category
     return 'normal'
@@ -182,6 +182,7 @@ def synthetic():
     assert result['pool_elo'] == 0 and result['ci95'] == [0, 0]
     assert result['decision'] == 'non-regression'
     assert termination_category('Draw by stalemate') == 'stalemate'
+    assert termination_category('Draw by insufficient mating material') == 'material'
     assert all(row['covariance'] > 0 and row['difference_variance'] == 0 for row in result['per_opponent'])
     for bad in (records[:-1], records + records[:1]):
         try:
