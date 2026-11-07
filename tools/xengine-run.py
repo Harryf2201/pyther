@@ -98,8 +98,8 @@ def options(exe, wanted):
             supported[match[1].lower()] = (match[1], match[2], match[3])
     controls = {'hash': '16', 'threads': '1', 'ponder': 'false', 'ownbook': 'false',
                 'usebook': 'false', 'book': 'false', 'learning': 'false', 'learn': 'false',
-                'bookfile': '', 'bookpath': '', 'bookdepth': '0',
-                'syzygypath': '', 'syzygyprobelimit': '0'}
+                'bookfile': '<empty>', 'bookpath': '<empty>', 'bookdepth': '0',
+                'syzygypath': '<empty>', 'syzygyprobelimit': '0'}
     for key, value in controls.items():
         if key in supported:
             name, kind, _ = supported[key]
