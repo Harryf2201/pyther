@@ -16,6 +16,18 @@ param(
     [long]$RunId = 0
 )
 $ErrorActionPreference = 'Stop'
+trap {
+    if ($runDir -and (Test-Path "$runDir\meta.txt")) {
+        if (-not (Test-Path "$runDir\results.json")) {
+            @{ type='xengine'; valid=$false; decision='fail'; run_id=$id;
+               error='External driver failed. See the local diagnostic logs.' } |
+                ConvertTo-Json | Set-Content "$runDir\results.json" -Encoding utf8
+        }
+        if (-not (Test-Path "$runDir\games.pgn")) { [IO.File]::WriteAllText("$runDir\games.pgn", '') }
+        if (-not (Test-Path "$runDir\output.txt")) { 'Failed external check' | Set-Content "$runDir\output.txt" }
+    }
+    throw
+}
 . "$PSScriptRoot\paths.ps1"
 Set-Location $RepoRoot
 function Invoke-Gh([string[]]$Arguments) {
