@@ -103,6 +103,8 @@ def prepare(asset):
     schedule = dict(inputs=request, pool_hash=A.digest('.github/xengine/pool-v1.json'),
                     options_hash=A.digest(kit / asset), pawnstorm_binaries=binary_hashes,
                     rust_identity=subprocess.check_output(['rustc', '+' + request['build']['rust'], '-vV'], text=True),
+                    rustc_sha256=A.digest(subprocess.check_output(
+                        ['rustup', 'which', '--toolchain', request['build']['rust'], 'rustc'], text=True).strip()),
                     blocks=blocks)
     A.write_json(kit / 'schedule.json', schedule)
     with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
