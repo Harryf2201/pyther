@@ -11,7 +11,7 @@ param(
     [ValidateRange(1,8)][int]$Jobs = 8,
     [ValidateSet('xengine-pool-v1')][string]$Pool = 'xengine-pool-v1',
     [ValidateRange(1,9007199254740991)][long]$Seed = 2026110701,
-    [ValidatePattern('^[A-Za-z0-9._-]{1,60}\.(pgn|epd)$')][string]$Book = '8moves_v3.pgn',
+    [ValidatePattern('(?-i)^[A-Za-z0-9._-]{1,60}\.(pgn|epd)$')][string]$Book = '8moves_v3.pgn',
     [string]$Notes = '',
     [long]$RunId = 0
 )
