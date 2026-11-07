@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 import random
+import re
 import statistics
 
 
@@ -96,8 +97,12 @@ def analyse(schedule, records, seed=2026110701, replicates=10000):
         raise ValueError('unequal opponent allocation')
     rng = random.Random(seed)
     boot = []
+    opponent_boot = {k: [] for k in cells}
     for _ in range(replicates):
-        boot.append(effect({k: rng.choices(v, k=len(v)) for k, v in cells.items()}))
+        sample = {k: rng.choices(v, k=len(v)) for k, v in cells.items()}
+        boot.append(effect(sample))
+        for k, pairs in sample.items():
+            opponent_boot[k].append(effect({k: pairs}))
     ci = interval(boot)
     cluster_boot = []
     if len(runners) >= 2:
@@ -125,7 +130,7 @@ def analyse(schedule, records, seed=2026110701, replicates=10000):
         d = [a - b for a, b in pairs]
         rows.append(dict(opponent=k, blocks=len(pairs), candidate_score=c, release_score=r,
                          candidate_wdl=dict(wdl[(k, 'candidate')]), release_wdl=dict(wdl[(k, 'release')]),
-                         pool_elo=effect({k: pairs}), covariance=covariance,
+                         pool_elo=effect({k: pairs}), ci95=interval(opponent_boot[k]), covariance=covariance,
                          difference_variance=statistics.variance(d) if len(d) > 1 else None))
     loo = {k: effect({o: v for o, v in cells.items() if o != k}) for k in cells} if len(cells) > 1 else {}
     return dict(type='xengine', valid=True, games=len(records), blocks=len(blocks), pool_elo=estimate,
@@ -180,14 +185,48 @@ def main():
         raise ValueError('missing or inconsistent schedule')
     schedule = json.loads(schedules[0].read_text())
     records = []
-    for p in sorted(root.rglob('records.jsonl')):
-        records.extend(json.loads(line) for line in p.read_text().splitlines() if line.strip())
+    record_files = sorted(root.rglob('records.jsonl'))
+    if len(record_files) != schedule['inputs']['jobs']:
+        raise ValueError('wrong number of completed shards')
+    configurations = []
+    for p in record_files:
+        shard_records = [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+        configurations.append(digest(p.parent / 'engines.json'))
+        if digest(p.parent / 'pool-lock.json') != schedule['pool_hash']:
+            raise ValueError('archived pool lock mismatch')
+        games = re.split(r'(?=^\[XBlock )', (p.parent / 'games.pgn').read_text(), flags=re.M)
+        parsed = {}
+        for game in games:
+            if not game.strip():
+                continue
+            tags = dict(re.findall(r'^\[(\w+) "(.*)"\]$', game, re.M))
+            role = tags['XRole']
+            colour = 'white' if tags['White'] == role else 'black'
+            key = (tags['XBlock'], role, colour)
+            if key in parsed:
+                raise ValueError('duplicate PGN game')
+            parsed[key] = tags
+        if len(parsed) != len(shard_records):
+            raise ValueError('PGN/record count mismatch')
+        for record in shard_records:
+            tags = parsed[(record['block'], record['role'], record['colour'])]
+            opponent = tags['Black'] if record['colour'] == 'white' else tags['White']
+            if (tags['Result'] != record['result'] or tags['FEN'] != record['fen']
+                    or opponent != record['opponent']):
+                raise ValueError('PGN/record identity, opening or result mismatch')
+        records.extend(shard_records)
+    if len(set(configurations)) != 1:
+        raise ValueError('runner engine binaries/options differ')
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
     try:
         result = analyse(schedule, records)
         result.update(pool_hash=schedule['pool_hash'], schedule_hash=digest(schedules[0]),
-                      inputs=schedule['inputs'], options_hash=schedule['options_hash'])
+                      inputs=schedule['inputs'], options_hash=schedule['options_hash'],
+                      engines_hash=configurations[0])
+        timings = [json.loads(p.read_text()) for p in root.rglob('timing.json')]
+        result['runner_seconds'] = sum(t['seconds'] for t in timings)
+        result['games_per_runner_second'] = result['games'] / result['runner_seconds']
         write_json(out / 'results.json', result)
     except ValueError as exc:
         write_json(out / 'results.json', dict(type='xengine', valid=False, decision='fail', error=str(exc)))

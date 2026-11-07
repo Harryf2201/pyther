@@ -96,6 +96,7 @@ def options(exe, wanted):
             supported[match[1].lower()] = (match[1], match[2], match[3])
     controls = {'hash': '16', 'threads': '1', 'ponder': 'false', 'ownbook': 'false',
                 'usebook': 'false', 'book': 'false', 'learning': 'false', 'learn': 'false',
+                'bookfile': '', 'bookpath': '', 'bookdepth': '0',
                 'syzygypath': '', 'syzygyprobelimit': '0'}
     for key, value in controls.items():
         if key in supported:
@@ -151,14 +152,15 @@ def play(shard):
     out = Path('result')
     out.mkdir(exist_ok=True)
     shutil.copy2('kit/schedule.json', out / 'schedule.json')
+    shutil.copy2('.github/xengine/pool-v1.json', out / 'pool-lock.json')
     A.write_json(out / 'engines.json', {name: dict(binary_sha256=A.digest(cmd[0]), options=cmd[1])
                                       for name, cmd in commands.items()})
 
     def block(b):
         folder = out / b['id']
         folder.mkdir()
-        opening = folder / 'opening.epd'
-        opening.write_text(b['fen'] + '\n')
+        opening = folder / 'opening.pgn'
+        opening.write_text('[SetUp "1"]\n[FEN "' + b['fen'] + '"]\n[Result "*"]\n\n*\n')
         records, pgns = [], []
         roles = ('candidate', 'release') if int(b['id'][1:]) % 2 == 0 else ('release', 'candidate')
         for role in roles:
@@ -170,7 +172,7 @@ def play(shard):
                     cmd, opts = commands[name]
                     args += ['-engine', 'cmd=' + cmd, 'name=' + name, 'proto=uci'] + opts
                 args += ['-each', 'tc=' + inputs['tc'], '-openings', 'file=' + str(opening.resolve()),
-                         'format=epd', 'order=sequential', '-rounds', '1', '-games', '1', '-concurrency', '1',
+                         'format=pgn', 'order=sequential', '-rounds', '1', '-games', '1', '-concurrency', '1',
                          '-pgnout', 'file=' + str(pgn.resolve())]
                 log = folder / (role + '-' + colour + '.log')
                 started = time.monotonic()
@@ -184,12 +186,16 @@ def play(shard):
                     raise ValueError('PGN opening mismatch')
                 # Preserve actual termination and final reason, including time losses/defects.
                 comments = re.findall(r'\{([^{}]*)\}', text)
-                termination = tags.get('Termination', '') + ' ' + (comments[-1] if comments else '')
-                termination = re.sub(r'^[+-]?[\d.M/-]+(?:\s+\d+(?:\.\d+)?s)?,?\s*', '', termination).strip()
+                reason = tags.get('Termination', '') + ' ' + (comments[-1] if comments else '')
+                termination = 'normal'
+                for category in ('illegal', 'crash', 'disconnect', 'stall', 'time', 'mate', 'repetition', 'fifty', 'material', 'stalemate'):
+                    if category in reason.lower():
+                        termination = category
+                        break
                 record = dict(block=b['id'], role=role, colour=colour, result=tags.get('Result'),
                               opponent=b['opponent'], fen=b['fen'], shard=shard,
                               options_hash=schedule['options_hash'], termination=termination,
-                              duration_seconds=time.monotonic()-started)
+                              reason=reason, duration_seconds=time.monotonic()-started)
                 records.append(record)
                 pgns.append('[XBlock "' + b['id'] + '"]\n[XRole "' + role + '"]\n' + text)
         (folder / 'records.jsonl').write_text(''.join(json.dumps(g) + '\n' for g in records))
