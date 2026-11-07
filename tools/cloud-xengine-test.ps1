@@ -118,8 +118,17 @@ do {
 # Always retain failure artifacts. Download only game shards, never engine binaries to this PC.
 $artifactDir = Join-Path $runDir 'artifacts'
 New-Item -ItemType Directory -Force $artifactDir | Out-Null
-try { $null = Invoke-Gh -Arguments @('run','download',"$id",'--pattern','xengine-shard-*','--dir',$artifactDir) }
-catch { $failed = $true }
+$archived = @(Get-ChildItem $artifactDir -Directory)
+$completeArchive = $playJobs.Count -gt 0 -and $archived.Count -eq $playJobs.Count
+foreach ($shard in $archived) {
+    foreach ($file in 'schedule.json','records.jsonl','games.pgn','engines.json','pool-lock.json','timing.json') {
+        if (-not (Test-Path (Join-Path $shard.FullName $file))) { $completeArchive = $false }
+    }
+}
+if (-not $completeArchive) {
+    try { $null = Invoke-Gh -Arguments @('run','download',"$id",'--pattern','xengine-shard-*','--dir',$artifactDir) }
+    catch { $failed = $true }
+}
 if ($rv.conclusion -ne 'success' -or $failed) {
     @{ type='xengine'; valid=$false; decision='fail'; run_id=$id; error="GitHub conclusion $($rv.conclusion), artifacts downloaded=$(-not $failed)" } |
         ConvertTo-Json | Set-Content "$runDir\results.json" -Encoding utf8
