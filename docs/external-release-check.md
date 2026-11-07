@@ -24,7 +24,7 @@ Example parameters for a 1,600-game calibration pilot are `-BlocksPerOpponentPer
 
 Each block contains both colours for candidate and release against one opponent, from
 one normalized unique start. Opponents have disjoint starts. Both versions run on the
-same standard Ubuntu runner. At most two game slots run per shard, bounded by CPU
+same standard Ubuntu runner. At most four game slots run per shard, bounded by CPU
 count, with Threads 1, Hash 16, fresh processes, disabled books/learning/tablebases and
 no evaluation adjudication. Candidate-first and release-first order alternates.
 Eight shards with 125 blocks per opponent give 16,000 games. Production size must

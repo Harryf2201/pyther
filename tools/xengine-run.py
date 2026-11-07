@@ -206,8 +206,8 @@ def play(shard):
         print('BLOCK ' + b['id'] + ' complete', flush=True)
         return folder
 
-    # Two slots on standard runners, further bounded by available CPU count.
-    slots = max(1, min(2, os.cpu_count() or 1))
+    # Four slots only when the standard runner exposes at least four CPUs.
+    slots = max(1, min(4, os.cpu_count() or 1))
     start = time.monotonic()
     with ThreadPoolExecutor(max_workers=slots) as workers:
         folders = list(workers.map(block, [b for b in schedule['blocks'] if b['shard'] == shard]))
