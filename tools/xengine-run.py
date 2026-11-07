@@ -30,6 +30,8 @@ def prepare(asset):
     kit.mkdir()
     download(asset, kit)
     request = read(kit / asset)
+    if A.digest('.github/xengine/pool-v1.json') != request['pool_hash']:
+        raise ValueError('requested pool lock differs from workflow checkout')
     for key, low, high in (('jobs', 1, 8), ('blocks', 1, 250), ('seed', 1, 2**53-1)):
         if type(request[key]) is not int or not low <= request[key] <= high:
             raise ValueError('invalid ' + key)

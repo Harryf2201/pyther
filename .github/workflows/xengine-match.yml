@@ -46,6 +46,18 @@ jobs:
           arg=()
           if [ "$MODE" = lock ]; then arg=(--lock); fi
           python3 tools/xengine-prep.py "${arg[@]}"
+      - name: Lock manifest to pin
+        if: always() && inputs.mode == 'lock'
+        run: |
+          echo XENGINE_LOCK_BEGIN
+          cat pool/observed-lock.json
+          echo XENGINE_LOCK_END
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always() && inputs.mode == 'lock'
+        with:
+          name: xengine-lock
+          path: pool/observed-lock.json
+          retention-days: 3
       - id: schedule
         if: inputs.mode == 'match'
         env:
