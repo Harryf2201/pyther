@@ -8,6 +8,7 @@ from pathlib import Path
 import random
 import re
 import statistics
+import sys
 
 
 def digest(path):
@@ -202,6 +203,12 @@ def main():
     if not schedules or len({digest(p) for p in schedules}) != 1:
         raise ValueError('missing or inconsistent schedule')
     schedule = json.loads(schedules[0].read_text())
+    request = schedule['inputs']
+    allocation = Counter((b['shard'], b['opponent']) for b in schedule['blocks'])
+    if (len(schedule['blocks']) != request['jobs'] * request['blocks'] * 4
+            or len(allocation) != request['jobs'] * 4
+            or any(n != request['blocks'] for n in allocation.values())):
+        raise ValueError('schedule disagrees with declared fixed sample size')
     records = []
     record_files = sorted(root.rglob('records.jsonl'))
     if len(record_files) != schedule['inputs']['jobs']:
@@ -250,11 +257,20 @@ def main():
         write_json(out / 'results.json', dict(type='xengine', valid=False, decision='fail', error=str(exc)))
         raise
     with (out / 'games.pgn').open('wb') as dest:
-        for p in sorted(root.rglob('games.pgn')):
-            dest.write(p.read_bytes())
+        for p in record_files:
+            dest.write((p.parent / 'games.pgn').read_bytes())
     print('Elo: %s; CI95: %s; %s' % (result['pool_elo'], result['ci95'], result['decision']))
     print('Games: %d, complete paired external-pool games' % result['games'])
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as exc:
+        if '--output' in sys.argv:
+            out = Path(sys.argv[sys.argv.index('--output') + 1])
+            out.mkdir(parents=True, exist_ok=True)
+            message = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+            write_json(out / 'results.json', dict(type='xengine', valid=False, decision='fail', error=message))
+        print('External analysis rejected the input: ' + type(exc).__name__, file=sys.stderr)
+        sys.exit(1)
