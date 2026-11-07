@@ -1,0 +1,94 @@
+name: xengine-match
+run-name: "xengine ${{ inputs.mode }} ${{ inputs.label }}"
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Lock pool hashes or play a frozen request
+        type: choice
+        options: [lock, match]
+        default: match
+      request:
+        description: Immutable testkit request asset
+        default: ''
+      label:
+        description: Unique run label
+        required: true
+
+permissions:
+  contents: read
+concurrency:
+  group: test-match
+  cancel-in-progress: false
+
+jobs:
+  prep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      shards: ${{ steps.schedule.outputs.shards }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Compiler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y g++-14
+          rustup toolchain install 1.90.0 --profile minimal
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        if: inputs.mode == 'match'
+        with:
+          path: pool
+          key: xengine-v1-${{ runner.os }}-${{ hashFiles('.github/xengine/pool-v1.json', 'tools/xengine-prep.py') }}
+      - name: Verify or lock pool
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          arg=()
+          if [ "$MODE" = lock ]; then arg=(--lock); fi
+          python3 tools/xengine-prep.py "${arg[@]}"
+      - id: schedule
+        if: inputs.mode == 'match'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST: ${{ inputs.request }}
+        run: python3 tools/xengine-run.py --prepare "$REQUEST"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: xengine-prepared
+          path: |
+            pool/
+            kit/
+          retention-days: 3
+          if-no-files-found: error
+
+  play:
+    if: inputs.mode == 'match'
+    needs: prep
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        shard: ${{ fromJson(needs.prep.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: xengine-prepared
+      - name: Rust toolchain
+        run: rustup toolchain install 1.90.0 --profile minimal
+      - name: Paired blocks
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: python3 tools/xengine-run.py --shard "$SHARD"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: xengine-shard-${{ matrix.shard }}
+          path: result/
+          retention-days: 3
+          if-no-files-found: error

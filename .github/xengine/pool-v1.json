@@ -1,0 +1,121 @@
+{
+  "id": "xengine-pool-v1",
+  "architecture": "x86-64-avx2",
+  "required_cpu": [
+    "avx2",
+    "bmi1",
+    "bmi2",
+    "fma",
+    "popcnt",
+    "abm"
+  ],
+  "toolchain": {
+    "runner": "ubuntu-24.04",
+    "compiler": "g++-14",
+    "rust": "1.90.0",
+    "sha256": null
+  },
+  "engines": [
+    {
+      "id": "Carp-3.0.1",
+      "source": {
+        "url": "https://github.com/dede1751/carp/archive/2f092e0d68bd4dbafae3a1353b2643b1e6bd77dc.tar.gz",
+        "sha256": null,
+        "commit": "2f092e0d68bd4dbafae3a1353b2643b1e6bd77dc"
+      },
+      "licence": "GPL-3.0",
+      "licence_path": "LICENSE",
+      "binary_sha256": null,
+      "uci": null,
+      "asset": {
+        "url": "https://github.com/dede1751/carp/releases/download/v3.0.1/carp-v3.0.1-linux-x86_64-V3",
+        "sha256": null
+      },
+      "checksums": {
+        "url": "https://github.com/dede1751/carp/releases/download/v3.0.1/checksums.txt",
+        "sha256": null
+      }
+    },
+    {
+      "id": "Koivisto-9.0",
+      "source": {
+        "url": "https://github.com/Luecx/Koivisto/archive/2895237d7a4ff267752fb19852ce9868bdccb753.tar.gz",
+        "sha256": null,
+        "commit": "2895237d7a4ff267752fb19852ce9868bdccb753"
+      },
+      "licence": "GPL-3.0",
+      "licence_path": "LICENSE.md",
+      "binary_sha256": null,
+      "uci": null,
+      "asset": {
+        "url": "https://github.com/Luecx/Koivisto/releases/download/v9.0/Koivisto_9.0-linux-avx2-pgo",
+        "sha256": null
+      }
+    },
+    {
+      "id": "RubiChess-20240817",
+      "source": {
+        "url": "https://github.com/Matthies/RubiChess/archive/3e56589fea1ab3a9e06796290cbd1e9f805bfc1b.tar.gz",
+        "sha256": null,
+        "commit": "3e56589fea1ab3a9e06796290cbd1e9f805bfc1b"
+      },
+      "licence": "GPL-3.0",
+      "licence_path": "copying",
+      "binary_sha256": null,
+      "uci": null,
+      "net": {
+        "url": "https://raw.githubusercontent.com/Matthies/NN/bc471a62eb8c0f21b71f084a2ee7865e829f3f4b/nn-bc638d5ec9-20240730.nnue",
+        "sha256": null,
+        "licence": "GPL-3.0, distributed with RubiChess"
+      },
+      "net_path": "src/nn-bc638d5ec9-20240730.nnue",
+      "commands": [
+        [
+          "make",
+          "-C",
+          "src",
+          "build",
+          "ARCH=x86-64-avx2",
+          "CXX=g++-14",
+          "MYCC=gcc-14",
+          "EVALFILE=default",
+          "EXE=RubiChess"
+        ]
+      ],
+      "output": "src/RubiChess"
+    },
+    {
+      "id": "Alexandria-9.0.0",
+      "source": {
+        "url": "https://github.com/PGG106/Alexandria/archive/f65f76c4e25e03602bf7512b726dace67c01a07d.tar.gz",
+        "sha256": null,
+        "commit": "f65f76c4e25e03602bf7512b726dace67c01a07d"
+      },
+      "licence": "GPL-3.0",
+      "licence_path": "LICENSE.md",
+      "binary_sha256": null,
+      "uci": null,
+      "net": {
+        "url": "https://github.com/PGG106/Alexandria-networks/releases/download/net09/nn.net",
+        "sha256": "b9a20ec5481b47d18151b42e35c46564e2b0b3d0582403aadacbdb529fc478f2",
+        "licence": "GPL-3.0 engine distribution; training data ODbL per tagged README"
+      },
+      "net_path": "nn.net",
+      "commands": [
+        [
+          "make",
+          "build=x86-64-avx2",
+          "CXX=g++-14",
+          "-j2"
+        ]
+      ],
+      "output": "Alexandria"
+    }
+  ],
+  "fastchess": {
+    "url": "https://github.com/Disservin/fastchess/releases/download/v1.8.2-alpha/fastchess-linux-x86-64.tar",
+    "commit": "f618e34540f94f4719ad3817950618dabe441318",
+    "sha256": null,
+    "binary_sha256": null
+  }
+}
