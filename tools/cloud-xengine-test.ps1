@@ -95,6 +95,7 @@ if ($rv.conclusion -ne 'success' -or $failed) {
     @{ type='xengine'; valid=$false; decision='fail'; run_id=$id; error="GitHub conclusion $($rv.conclusion), artifacts downloaded=$(-not $failed)" } |
         ConvertTo-Json | Set-Content "$runDir\results.json" -Encoding utf8
     'Failed external check' | Set-Content "$runDir\output.txt"
+    [IO.File]::WriteAllText("$runDir\games.pgn", '')
     throw "cloud run $id failed. Artifacts retained for diagnosis. Stop dispatching."
 }
 $python = if (Get-Command py -ErrorAction SilentlyContinue) { 'py' } else { 'python3' }

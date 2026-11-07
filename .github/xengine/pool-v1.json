@@ -12,7 +12,7 @@
   "toolchain": {
     "runner": "ubuntu-24.04",
     "compiler": "g++-14",
-    "rust": "1.90.0",
+    "rust": "1.99.0",
     "sha256": "6fb08567a23031fab130ce7412b2c6448c84d53e6bd857858ed6748480aa769a",
     "identity": "g++-14 (Ubuntu 14.2.0-4ubuntu2~24.04.1) 14.2.0\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n\nGNU ld (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) a later version.\nThis program has absolutely no warranty.\n\nGNU Make 4.3\nBuilt for x86_64-pc-linux-gnu\nCopyright (C) 1988-2020 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\n916ef3c03c2d024857af2e084d3648204033b9c79e0e62575974f567f99adc84e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b"
   },

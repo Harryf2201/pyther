@@ -124,12 +124,16 @@ def play(shard):
     if not set(pool['required_cpu']) <= flags:
         raise ValueError('runner lacks locked CPU features')
     inputs = schedule['inputs']
+    out = Path('result')
+    out.mkdir(exist_ok=True)
+    shutil.copy2('kit/schedule.json', out / 'schedule.json')
+    shutil.copy2('.github/xengine/pool-v1.json', out / 'pool-lock.json')
     commands = {}
     for role in ('candidate', 'release'):
         spec = inputs[role]
         work = Path('build-' + role)
         subprocess.run(['git', 'worktree', 'add', '--detach', str(work), spec['ref']], check=True)
-        subprocess.run(['cargo', '+1.90.0', 'build', '--locked', '--release', '-p', 'pawnstorm'], cwd=work, check=True)
+        subprocess.run(['cargo', '+' + pool['toolchain']['rust'], 'build', '--locked', '--release', '-p', 'pawnstorm'], cwd=work, check=True)
         exe = Path('eng-' + role)
         shutil.copy2(work / 'target/release/pawnstorm', exe)
         wanted = {}
@@ -149,10 +153,6 @@ def play(shard):
     fc.chmod(0o755)
     if A.digest(fc) != pool['fastchess']['binary_sha256']:
         raise ValueError('fastchess mismatch')
-    out = Path('result')
-    out.mkdir(exist_ok=True)
-    shutil.copy2('kit/schedule.json', out / 'schedule.json')
-    shutil.copy2('.github/xengine/pool-v1.json', out / 'pool-lock.json')
     A.write_json(out / 'engines.json', {name: dict(binary_sha256=A.digest(cmd[0]), options=cmd[1])
                                       for name, cmd in commands.items()})
 
@@ -197,8 +197,9 @@ def play(shard):
                               options_hash=schedule['options_hash'], termination=termination,
                               reason=reason, duration_seconds=time.monotonic()-started)
                 records.append(record)
+                with (folder / 'records.block.jsonl').open('a') as journal:
+                    journal.write(json.dumps(record) + '\n')
                 pgns.append('[XBlock "' + b['id'] + '"]\n[XRole "' + role + '"]\n' + text)
-        (folder / 'records.jsonl').write_text(''.join(json.dumps(g) + '\n' for g in records))
         (folder / 'combined.pgn').write_text('\n'.join(pgns))
         print('BLOCK ' + b['id'] + ' complete', flush=True)
         return folder
@@ -210,11 +211,8 @@ def play(shard):
         folders = list(workers.map(block, [b for b in schedule['blocks'] if b['shard'] == shard]))
     with (out / 'records.jsonl').open('wb') as records, (out / 'games.pgn').open('wb') as pgn:
         for folder in folders:
-            records.write((folder / 'records.jsonl').read_bytes())
+            records.write((folder / 'records.block.jsonl').read_bytes())
             pgn.write((folder / 'combined.pgn').read_bytes())
-    # Individual files remain available for diagnosis but are not counted twice by analysis.
-    for folder in folders:
-        (folder / 'records.jsonl').rename(folder / 'records.block.jsonl')
     A.write_json(out / 'timing.json', dict(seconds=time.monotonic()-start, slots=slots, shard=shard))
 
 
