@@ -189,11 +189,7 @@ def play(shard):
                 # Preserve actual termination and final reason, including time losses/defects.
                 comments = re.findall(r'\{([^{}]*)\}', text)
                 reason = tags.get('Termination', '') + ' ' + (comments[-1] if comments else '')
-                termination = 'normal'
-                for category in ('illegal', 'crash', 'disconnect', 'stall', 'time', 'mate', 'repetition', 'fifty', 'material', 'stalemate'):
-                    if category in reason.lower():
-                        termination = category
-                        break
+                termination = A.termination_category(reason)
                 record = dict(block=b['id'], role=role, colour=colour, result=tags.get('Result'),
                               opponent=b['opponent'], fen=b['fen'], shard=shard,
                               options_hash=schedule['options_hash'], termination=termination,

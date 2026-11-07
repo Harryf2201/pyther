@@ -23,6 +23,15 @@ def elo(p):
     return 400 * math.log10(p / (1 - p)) if 0 < p < 1 else None
 
 
+def termination_category(reason):
+    reason = reason.lower()
+    for category in ('illegal', 'crash', 'disconnect', 'stall', 'time', 'stalemate',
+                     'mate', 'repetition', 'fifty', 'material'):
+        if category in reason:
+            return category
+    return 'normal'
+
+
 def effect(cells):
     values = []
     for pairs in cells.values():
@@ -79,7 +88,7 @@ def analyse(schedule, records, seed=2026110701, replicates=10000):
             score = 1 - score
         scores[b['id']][(g['role'], g['colour'])] = score
         seen.add(key)
-        term = g['termination']
+        term = termination_category(g['reason']) if 'reason' in g else g['termination']
         terminations[term] += 1
         if any(word in term.lower() for word in ('crash', 'disconnect', 'illegal', 'stall')):
             defects.append(key)
@@ -172,6 +181,7 @@ def synthetic():
     result = analyse(schedule, records, replicates=1000)
     assert result['pool_elo'] == 0 and result['ci95'] == [0, 0]
     assert result['decision'] == 'non-regression'
+    assert termination_category('Draw by stalemate') == 'stalemate'
     assert all(row['covariance'] > 0 and row['difference_variance'] == 0 for row in result['per_opponent'])
     for bad in (records[:-1], records + records[:1]):
         try:
@@ -248,7 +258,7 @@ def main():
         result = analyse(schedule, records)
         result.update(pool_hash=schedule['pool_hash'], schedule_hash=digest(schedules[0]),
                       inputs=schedule['inputs'], options_hash=schedule['options_hash'],
-                      engines_hash=configurations[0])
+                      engines_hash=configurations[0], analysis_sha256=digest(__file__))
         timings = [json.loads(p.read_text()) for p in root.rglob('timing.json')]
         result['runner_seconds'] = sum(t['seconds'] for t in timings)
         result['games_per_runner_second'] = result['games'] / result['runner_seconds']
