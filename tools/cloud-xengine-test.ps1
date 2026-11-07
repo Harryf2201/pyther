@@ -92,8 +92,13 @@ if (-not (Test-Path "$runDir\meta.txt")) { $meta | Set-Content "$runDir\meta.txt
 $created = ((Get-Content "$runDir\meta.txt" | Where-Object { $_ -match '^created=' } | Select-Object -First 1) -replace '^created=', '')
 $failed = $false
 do {
-    $rv = Invoke-Gh -Arguments @('run','view',"$id",'--json','status,conclusion,workflowName') | ConvertFrom-Json
+    $rv = Invoke-Gh -Arguments @('run','view',"$id",'--json','status,conclusion,workflowName,jobs') | ConvertFrom-Json
     if ($rv.workflowName -ne 'xengine-match') { throw 'Run ID belongs to another workflow' }
+    $playJobs = @($rv.jobs | Where-Object { $_.name -like 'play (*)' })
+    @{ state=$rv.status; shards_total=$playJobs.Count;
+       shards_done=@($playJobs | Where-Object { $_.conclusion -eq 'success' }).Count;
+       shards_failed=@($playJobs | Where-Object { $_.conclusion -eq 'failure' }).Count } |
+        ConvertTo-Json | Set-Content "$runDir\progress.json" -Encoding utf8
     "$(Get-Date -Format o) cloud run $id $($rv.status)" | Add-Content "$runDir\progress.log"
     if ($rv.status -ne 'completed') { Start-Sleep 60 }
 } while ($rv.status -ne 'completed')

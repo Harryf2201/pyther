@@ -1378,11 +1378,12 @@ fn xengine_runs(root: &Path) -> String {
         let Some(meta) = read_meta(&p).filter(|m| m.kind == "xengine") else { continue };
         let result = std::fs::read_to_string(p.join("results.json")).unwrap_or_else(|_| "null".into());
         let state = if result.trim() == "null" { "running" } else { "finished" };
+        let progress = std::fs::read_to_string(p.join("progress.json")).unwrap_or_else(|_| "null".into());
         let text = std::fs::read_to_string(p.join("meta.txt")).unwrap_or_default();
         let base = text.lines().find_map(|l| l.strip_prefix("base=")).unwrap_or("");
         titles.insert(meta.name.clone());
-        items.push(format!("{{\"id\":{},\"name\":{},\"main\":{},\"base\":{},\"state\":{},\"total\":{},\"created\":{},\"result\":{}}}",
-            js(&entry.file_name().to_string_lossy()), js(&meta.name), js(&meta.main), js(base), js(state), meta.total, meta.created, result.trim_start_matches('\u{feff}').trim()));
+        items.push(format!("{{\"id\":{},\"name\":{},\"main\":{},\"base\":{},\"state\":{},\"total\":{},\"created\":{},\"result\":{},\"progress\":{}}}",
+            js(&entry.file_name().to_string_lossy()), js(&meta.name), js(&meta.main), js(base), js(state), meta.total, meta.created, result.trim_start_matches('\u{feff}').trim(), progress.trim_start_matches('\u{feff}').trim()));
     }
     for entry in std::fs::read_dir(root.join("coord/cloud-queue")).into_iter().flatten().flatten() {
         let p = entry.path();
