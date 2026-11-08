@@ -216,3 +216,31 @@ All game results are GitHub cloud tests at 8+0.08, 3600 games each, unless noted
 | ARM-only NNUE speed-ups (bucket-packed L2/L3, 16-wide NEON pairwise, shared-input SDOT L1) | node-identical; +0.6% on the N1 bot server (8/10 paired benches); x86 neutral | For v2.7 | branch armspeed |
 | Bot: online tablebase below 8 s on the clock? 703 low-clock 6-7 piece moves checked against the Lichess tablebase | 0 result-changing moves | No change | testing\lichess\review |
 | Unbalanced measurement book from our own engine (12,596 starts, 70-130 cp, extended from 8moves_v3) + optional per-test book in the cloud workflow | Sensitivity check queued | Screens only; release checks stay on 8moves_v3 | testing\books\pyther-unbal-v1.*, master 3851d3a |
+
+## Nov 7–8, external release-check calibration
+
+The fixed pool is Carp 3.0.1, Koivisto 9.0, RubiChess 20240817 and Alexandria 9.0.0.
+Sources, networks, compiler identity, recipes and executable hashes are pinned in
+`.github/xengine/pool-v1.json`. Both Pawnstorm roles use commit
+`b140c1856c3b32e446ec16f3159df4a3e548b04a`. Prep builds each unique Pawnstorm
+ref once with Rust 1.99.0 and explicit x86-64-v3 flags, then distributes identical
+verified executables to every shard. Networks and options are immutable run inputs.
+
+| Check | Result | Interpretation | GitHub run |
+|---|---|---|---|
+| Portable A/A, Pyther-2.7 vs itself, 320 games | +5.4 pool-Elo, paired 95% CI [-49.8, +61.2] | Consistent with zero; complete paired blocks and identical binary hashes | 42425688542 |
+| Portable pilot, Pyther-2.7 vs Pyther-2.6, 1,600 games at 8+0.08 | +23.5 pool-Elo, paired 95% CI [+0.5, +46.4]; raw score difference +2.56 percentage points | Improvement classification in this calibration sample; runner-cluster sensitivity [-7.5, +53.8] | 42426978744 |
+| Earlier native-CPU pilot, 1,600 games | Rejected by cross-shard executable-hash validation | The approved ref defaults to target-cpu=native. Artifacts and the failed queue entry are retained | 42421595855 |
+
+The portable pilot used four shards with four game slots each. Its 400 complete
+opening blocks produced per-opponent differences of +32.3, +5.4, +20.7 and +35.8
+pool-Elo in the pool order above. Leaving out one opponent gives +19.4 to +29.6.
+There were 761 draws, 839 decisive games, zero time losses and zero product defects.
+Measured play consumed 3.09 runner-hours, about 517 games per runner-hour.
+
+The measured influence variance gives an approximate 17,072-game planning size for
+80% power at a true +10 pool-Elo. Eight equal shards round this to 17,152 games.
+This pilot calibrates variance and throughput. Freeze the confirmation size before
+playing fresh openings, alongside the independent self-play release checks described
+in `docs/external-release-check.md`. All external games and derived material stay in
+the testing-only namespace.
