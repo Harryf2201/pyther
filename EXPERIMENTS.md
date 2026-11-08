@@ -230,6 +230,7 @@ verified executables to every shard. Networks and options are immutable run inpu
 |---|---|---|---|
 | Portable A/A, Pyther-2.7 vs itself, 320 games | +5.4 pool-Elo, paired 95% CI [-49.8, +61.2] | Consistent with zero; complete paired blocks and identical binary hashes | 42425688542 |
 | Portable pilot, Pyther-2.7 vs Pyther-2.6, 1,600 games at 8+0.08 | +23.5 pool-Elo, paired 95% CI [+0.5, +46.4]; raw score difference +2.56 percentage points | Improvement classification in this calibration sample; runner-cluster sensitivity [-7.5, +53.8] | 42426978744 |
+| Initial native-CPU A/A, Pyther-2.7 vs itself, 320 games | -32.4 pool-Elo, paired 95% CI [-72.2, +3.8] | Identical role inputs verified; noisy Alexandria imbalance retained in the calibration record | 42418117864 |
 | Earlier native-CPU pilot, 1,600 games | Rejected by cross-shard executable-hash validation | The approved ref defaults to target-cpu=native. Artifacts and the failed queue entry are retained | 42421595855 |
 
 The portable pilot used four shards with four game slots each. Its 400 complete
